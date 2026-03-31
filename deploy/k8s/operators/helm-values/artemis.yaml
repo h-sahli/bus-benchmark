@@ -1,0 +1,5 @@
+clusterScoped: true
+watchNamespaces: []
+crds:
+  apply: true
+  keep: true

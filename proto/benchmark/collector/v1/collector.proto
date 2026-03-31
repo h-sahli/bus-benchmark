@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package benchmark.collector.v1;
+
+option go_package = "github.com/ninefinger9/bus/proto/benchmark/collector/v1;collectorv1";
+
+message AgentDescriptor {
+  string run_id = 1;
+  string iteration_id = 2;
+  string agent_id = 3;
+  string role = 4;
+  string broker_id = 5;
+  string node_name = 6;
+  string pod_name = 7;
+  string version = 8;
+}
+
+message RegisterAgentRequest {
+  AgentDescriptor agent = 1;
+}
+
+message RegisterAgentResponse {
+  bool accepted = 1;
+  string schedule_token = 2;
+}
+
+message WaitForScheduleRequest {
+  string run_id = 1;
+  string iteration_id = 2;
+  string schedule_token = 3;
+}
+
+message PhaseSchedule {
+  string timing_confidence = 1;
+  int64 warmup_start_unix_ns = 2;
+  int64 measure_start_unix_ns = 3;
+  int64 measure_end_unix_ns = 4;
+  int64 cooldown_end_unix_ns = 5;
+  repeated string warnings = 6;
+}
+
+message TransportMetadata {
+  string partition = 1;
+  string offset = 2;
+  string routing_key = 3;
+  bool redelivered = 4;
+  uint32 delivery_attempt = 5;
+}
+
+message LatencyObservation {
+  string run_id = 1;
+  string iteration_id = 2;
+  string broker_id = 3;
+  string scenario_id = 4;
+  string event_id = 5;
+  string producer_agent_id = 6;
+  string consumer_agent_id = 7;
+  uint64 producer_publish_start_ns = 8;
+  uint64 producer_publish_invoke_ns = 9;
+  uint64 producer_ack_ns = 10;
+  uint64 consumer_transport_receive_ns = 11;
+  uint64 consumer_parse_complete_ns = 12;
+  uint64 payload_size_bytes = 13;
+  uint64 serialized_event_size_bytes = 14;
+  uint64 producer_sequence = 15;
+  TransportMetadata transport = 16;
+}
+
+message ResourceSample {
+  string run_id = 1;
+  string iteration_id = 2;
+  string source_type = 3;
+  string source_id = 4;
+  int64 captured_at_unix_ns = 5;
+  uint64 cpu_millicores = 6;
+  uint64 memory_bytes = 7;
+  uint64 disk_read_bytes = 8;
+  uint64 disk_write_bytes = 9;
+  uint64 network_rx_bytes = 10;
+  uint64 network_tx_bytes = 11;
+}
+
+message AgentIssue {
+  string run_id = 1;
+  string iteration_id = 2;
+  string agent_id = 3;
+  string code = 4;
+  string severity = 5;
+  string message = 6;
+}
+
+message ObservationBatch {
+  AgentDescriptor agent = 1;
+  repeated LatencyObservation latency_observations = 2;
+  repeated ResourceSample resource_samples = 3;
+  repeated AgentIssue issues = 4;
+}
+
+message PushObservationsAck {
+  uint64 accepted_observations = 1;
+  repeated string warnings = 2;
+}
+
+message FinalizeAgentRequest {
+  AgentDescriptor agent = 1;
+  bool completed = 2;
+}
+
+message FinalizeAgentResponse {
+  bool accepted = 1;
+}
+
+service CollectorService {
+  rpc RegisterAgent(RegisterAgentRequest) returns (RegisterAgentResponse);
+  rpc WaitForSchedule(WaitForScheduleRequest) returns (PhaseSchedule);
+  rpc PushObservations(stream ObservationBatch) returns (PushObservationsAck);
+  rpc FinalizeAgent(FinalizeAgentRequest) returns (FinalizeAgentResponse);
+}

@@ -1,0 +1,571 @@
+openapi: 3.1.0
+info:
+  title: Bus Benchmark Control Plane API
+  version: 1.0.0
+  description: Current runtime API for benchmark runs, measured results, and reports.
+servers:
+  - url: /
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+  /api/system/bootstrap:
+    get:
+      summary: Operator bootstrap status
+      responses:
+        "200":
+          description: Bootstrap status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BootstrapStatus"
+  /api/brokers:
+    get:
+      summary: Supported brokers
+      responses:
+        "200":
+          description: Broker catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerCatalogResponse"
+  /api/presets:
+    get:
+      summary: Scenario presets
+      responses:
+        "200":
+          description: Scenario preset catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PresetCatalog"
+  /api/broker-profiles:
+    get:
+      summary: Broker profile catalog
+      responses:
+        "200":
+          description: Broker profile catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerProfileCatalog"
+  /api/runs:
+    get:
+      summary: List runs
+      responses:
+        "200":
+          description: Run list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRunsResponse"
+    post:
+      summary: Create a run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "200":
+          description: Run created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+  /api/runs/{runId}:
+    get:
+      summary: Get a run and its events
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+    delete:
+      summary: Delete a completed run and any linked reports
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Deleted
+  /api/runs/{runId}/artifacts:
+    get:
+      summary: List persisted measurement artifacts for one run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Run artifact list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunArtifactList"
+  /api/runs/{runId}/artifacts/{artifactId}/download:
+    get:
+      summary: Download one persisted run artifact
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/ArtifactId"
+      responses:
+        "200":
+          description: Artifact file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+  /api/runs/{runId}/stop:
+    post:
+      summary: Stop a run
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: Stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StopRunResponse"
+  /api/runs/reset-all:
+    delete:
+      summary: Clear all runs, reports, and run namespaces
+      responses:
+        "200":
+          description: Reset
+  /api/reports:
+    get:
+      summary: List generated reports
+      responses:
+        "200":
+          description: Report list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListReportsResponse"
+    post:
+      summary: Generate a PDF report from completed measured runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportRequest"
+      responses:
+        "200":
+          description: Report record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRecord"
+  /api/reports/{reportId}:
+    get:
+      summary: Get one report record
+      parameters:
+        - $ref: "#/components/parameters/ReportId"
+      responses:
+        "200":
+          description: Report record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportRecord"
+  /api/reports/{reportId}/download:
+    get:
+      summary: Download a generated PDF report
+      parameters:
+        - $ref: "#/components/parameters/ReportId"
+      responses:
+        "200":
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+components:
+  parameters:
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema:
+        type: string
+    ArtifactId:
+      name: artifactId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    BootstrapStatus:
+      type: object
+      required: [enabled, ready, message, operators]
+      properties:
+        enabled:
+          type: boolean
+        attempted:
+          type: boolean
+        ready:
+          type: boolean
+        message:
+          type: string
+        operators:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/OperatorState"
+    OperatorState:
+      type: object
+      required: [label, ready, message]
+      properties:
+        label:
+          type: string
+        namespace:
+          type: string
+        ready:
+          type: boolean
+        message:
+          type: string
+    BrokerCatalogResponse:
+      type: object
+      required: [brokers]
+      properties:
+        brokers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Broker"
+    Broker:
+      type: object
+      required: [id, label, defaultProtocol, protocolOptions]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        defaultProtocol:
+          type: string
+        protocolOptions:
+          type: array
+          items:
+            type: string
+        latestStableVersion:
+          type: string
+        operatorVersion:
+          type: string
+    PresetCatalog:
+      type: object
+      properties:
+        version:
+          type: integer
+        presets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Preset"
+        rateProfiles:
+          type: object
+          additionalProperties: true
+    Preset:
+      type: object
+      required: [id, name, topology, producers, consumers, payloadSizeBytes, rateProfile]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        topology:
+          type: string
+        producers:
+          type: integer
+        consumers:
+          type: integer
+        payloadSizeBytes:
+          type: integer
+        rateProfile:
+          type: string
+        configMode:
+          type: string
+    BrokerProfileCatalog:
+      type: object
+      required: [version, profiles]
+      properties:
+        version:
+          type: integer
+        profiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrokerProfile"
+    BrokerProfile:
+      type: object
+      required: [id, brokerId, mode]
+      properties:
+        id:
+          type: string
+        brokerId:
+          type: string
+        mode:
+          type: string
+          enum: [baseline, optimized]
+        operator:
+          type: object
+          additionalProperties: true
+        deployment:
+          type: object
+          additionalProperties: true
+        clientDefaults:
+          type: object
+          additionalProperties: true
+        semanticMapping:
+          type: object
+          additionalProperties: true
+    CreateRunRequest:
+      type: object
+      required: [name, brokerId]
+      properties:
+        name:
+          type: string
+        brokerId:
+          type: string
+          enum: [kafka, rabbitmq, artemis]
+        protocol:
+          type: string
+        scenarioId:
+          type: string
+        configMode:
+          type: string
+          enum: [baseline, optimized]
+        deploymentMode:
+          type: string
+          enum: [normal, ha]
+        startsAt:
+          type: string
+          format: date-time
+        warmupSeconds:
+          type: integer
+        measurementSeconds:
+          type: integer
+        cooldownSeconds:
+          type: integer
+        messageRate:
+          type: integer
+        messageSizeBytes:
+          type: integer
+        producers:
+          type: integer
+        consumers:
+          type: integer
+        transportOptions:
+          type: object
+          properties:
+            rateProfileKind:
+              type: string
+              enum: [constant, ramp-up, ramp-down, step-up, burst]
+            peakMessageRate:
+              type: integer
+        brokerTuning:
+          type: object
+          additionalProperties: true
+    Run:
+      type: object
+      required: [id, name, brokerId, status, runtimeNamespace]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        runtimeNamespace:
+          type: string
+        brokerId:
+          type: string
+        protocol:
+          type: string
+        scenarioId:
+          type: string
+        configMode:
+          type: string
+        deploymentMode:
+          type: string
+        targetReplicas:
+          type: integer
+        startsAt:
+          type: string
+          format: date-time
+        warmupSeconds:
+          type: integer
+        measurementSeconds:
+          type: integer
+        cooldownSeconds:
+          type: integer
+        messageRate:
+          type: integer
+        messageSizeBytes:
+          type: integer
+        producers:
+          type: integer
+        consumers:
+          type: integer
+        transportOptions:
+          type: object
+          additionalProperties: true
+        brokerTuning:
+          type: object
+          additionalProperties: true
+        metrics:
+          type: object
+          additionalProperties: true
+        topologyReadyAt:
+          type: string
+          format: date-time
+        executionStartedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        topologyDeletedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        stoppedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+        progress:
+          type: object
+          additionalProperties: true
+        phaseWindow:
+          type: object
+          additionalProperties: true
+    RunDetail:
+      type: object
+      required: [run, events]
+      properties:
+        run:
+          $ref: "#/components/schemas/Run"
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    RunArtifactRecord:
+      type: object
+      required: [id, runId, artifactType, fileName, fileFormat, recordCount, sizeBytes, createdAt, downloadUrl]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        artifactType:
+          type: string
+        fileName:
+          type: string
+        fileFormat:
+          type: string
+        recordCount:
+          type: integer
+        sizeBytes:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        downloadUrl:
+          type: string
+    RunArtifactList:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunArtifactRecord"
+    ListRunsResponse:
+      type: object
+      required: [runs, recentEvents, serverTime]
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Run"
+        recentEvents:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        serverTime:
+          type: string
+          format: date-time
+    StopRunResponse:
+      type: object
+      required: [id, status, stoppedAt]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        stoppedAt:
+          type: string
+          format: date-time
+    CreateReportRequest:
+      type: object
+      required: [title, runIds]
+      properties:
+        title:
+          type: string
+        runIds:
+          type: array
+          items:
+            type: string
+    ReportRecord:
+      type: object
+      required: [id, title, runIds, status, createdAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        runIds:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum: [rendering, ready, failed]
+        fileName:
+          type: string
+        sizeBytes:
+          type: integer
+        errorMessage:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        downloadUrl:
+          type: string
+    ListReportsResponse:
+      type: object
+      required: [reports]
+      properties:
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReportRecord"

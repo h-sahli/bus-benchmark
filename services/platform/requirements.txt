@@ -1,0 +1,7 @@
+boto3==1.40.18
+fastapi==0.115.12
+hdrhistogram==0.10.3
+psycopg[binary]==3.2.10
+PyYAML==6.0.2
+reportlab==4.4.1
+uvicorn[standard]==0.34.0

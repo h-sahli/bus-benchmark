@@ -1,0 +1,173 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bus-platform
+  namespace: {{ include "bus-platform.namespace" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bus-platform
+  template:
+    metadata:
+      labels:
+        app: bus-platform
+      annotations:
+        bus.ninefinger9.io/build-id: {{ .Values.env.buildId | quote }}
+        bus.ninefinger9.io/asset-version: {{ .Values.env.assetVersion | quote }}
+    spec:
+      serviceAccountName: {{ include "bus-platform.serviceAccountName" . }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range .Values.imagePullSecrets }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: app
+          image: {{ include "bus-platform.platformImage" . | quote }}
+          imagePullPolicy: {{ .Values.images.platform.pullPolicy | quote }}
+          env:
+            - name: BUS_STORAGE_MODE
+              value: {{ .Values.env.storageMode | quote }}
+            - name: BUS_DB_PATH
+              value: {{ .Values.env.busDbPath | quote }}
+            - name: BUS_ENABLE_CLUSTER_ACTIONS
+              value: {{ .Values.env.enableClusterActions | quote }}
+            - name: BUS_ENABLE_OPERATOR_BOOTSTRAP
+              value: {{ .Values.env.enableOperatorBootstrap | quote }}
+            - name: BUS_ACCESS_URL
+              value: {{ include "bus-platform.accessUrl" . | trim | quote }}
+            - name: BUS_BUILD_ID
+              value: {{ .Values.env.buildId | quote }}
+            - name: BUS_ASSET_VERSION
+              value: {{ .Values.env.assetVersion | quote }}
+            - name: BUS_BENCHMARK_AGENT_IMAGE
+              value: {{ include "bus-platform.agentImage" . | quote }}
+            - name: BUS_PLATFORM_IMAGE
+              value: {{ include "bus-platform.platformImage" . | quote }}
+            - name: BUS_PLATFORM_NAMESPACE
+              value: {{ include "bus-platform.namespace" . | quote }}
+            - name: BUS_PLATFORM_DATA_PVC
+              value: "bus-platform-data"
+            - name: BUS_PLATFORM_DATA_NAMESPACE
+              value: {{ .Values.env.platformDataNamespace | quote }}
+            - name: BUS_AGENT_IMAGE_PULL_SECRET
+              value: {{ .Values.agentImagePullSecret | quote }}
+            - name: BUS_AGENT_IMAGE_PULL_POLICY
+              value: {{ .Values.env.benchmarkAgentImagePullPolicy | quote }}
+            - name: BUS_AGENT_START_BARRIER_SECONDS
+              value: {{ .Values.env.agentStartBarrierSeconds | quote }}
+            - name: BUS_RESOURCE_POLL_SECONDS
+              value: {{ .Values.env.resourcePollSeconds | quote }}
+            - name: BUS_BENCHMARK_JOB_TIMEOUT_SECONDS
+              value: {{ .Values.env.benchmarkJobTimeoutSeconds | quote }}
+            - name: BUS_PLATFORM_CPU_REQUEST
+              value: {{ .Values.resources.platform.requests.cpu | quote }}
+            - name: BUS_PLATFORM_MEMORY_REQUEST
+              value: {{ .Values.resources.platform.requests.memory | quote }}
+            - name: BUS_PLATFORM_CPU_LIMIT
+              value: {{ .Values.resources.platform.limits.cpu | quote }}
+            - name: BUS_PLATFORM_MEMORY_LIMIT
+              value: {{ .Values.resources.platform.limits.memory | quote }}
+            - name: BUS_PRODUCER_JOB_CPU_REQUEST
+              value: {{ .Values.resources.benchmarkJobs.producer.requests.cpu | quote }}
+            - name: BUS_PRODUCER_JOB_MEMORY_REQUEST
+              value: {{ .Values.resources.benchmarkJobs.producer.requests.memory | quote }}
+            - name: BUS_PRODUCER_JOB_CPU_LIMIT
+              value: {{ .Values.resources.benchmarkJobs.producer.limits.cpu | quote }}
+            - name: BUS_PRODUCER_JOB_MEMORY_LIMIT
+              value: {{ .Values.resources.benchmarkJobs.producer.limits.memory | quote }}
+            - name: BUS_CONSUMER_JOB_CPU_REQUEST
+              value: {{ .Values.resources.benchmarkJobs.consumer.requests.cpu | quote }}
+            - name: BUS_CONSUMER_JOB_MEMORY_REQUEST
+              value: {{ .Values.resources.benchmarkJobs.consumer.requests.memory | quote }}
+            - name: BUS_CONSUMER_JOB_CPU_LIMIT
+              value: {{ .Values.resources.benchmarkJobs.consumer.limits.cpu | quote }}
+            - name: BUS_CONSUMER_JOB_MEMORY_LIMIT
+              value: {{ .Values.resources.benchmarkJobs.consumer.limits.memory | quote }}
+            - name: BUS_FINALIZER_JOB_CPU_REQUEST
+              value: {{ .Values.resources.finalizer.requests.cpu | quote }}
+            - name: BUS_FINALIZER_JOB_MEMORY_REQUEST
+              value: {{ .Values.resources.finalizer.requests.memory | quote }}
+            - name: BUS_FINALIZER_JOB_CPU_LIMIT
+              value: {{ .Values.resources.finalizer.limits.cpu | quote }}
+            - name: BUS_FINALIZER_JOB_MEMORY_LIMIT
+              value: {{ .Values.resources.finalizer.limits.memory | quote }}
+            - name: BUS_CNPG_OPERATOR_NAMESPACE
+              value: {{ .Values.storageBootstrap.postgres.operatorNamespace | quote }}
+            - name: BUS_POSTGRES_CLUSTER_NAME
+              value: {{ .Values.storageBootstrap.postgres.clusterName | quote }}
+            - name: BUS_POSTGRES_HOST
+              value: {{ printf "%s-rw.%s.svc.cluster.local" .Values.storageBootstrap.postgres.clusterName .Values.env.platformDataNamespace | quote }}
+            - name: BUS_POSTGRES_PORT
+              value: "5432"
+            - name: BUS_POSTGRES_DATABASE
+              value: {{ .Values.storageBootstrap.postgres.database | quote }}
+            - name: BUS_POSTGRES_USERNAME
+              value: {{ .Values.storageBootstrap.postgres.username | quote }}
+            - name: BUS_POSTGRES_PASSWORD
+              value: {{ .Values.storageBootstrap.postgres.password | quote }}
+            - name: BUS_POSTGRES_SUPERUSER_PASSWORD
+              value: {{ .Values.storageBootstrap.postgres.superuserPassword | quote }}
+            - name: BUS_POSTGRES_INSTANCES
+              value: {{ .Values.storageBootstrap.postgres.instances | quote }}
+            - name: BUS_POSTGRES_STORAGE_SIZE
+              value: {{ .Values.storageBootstrap.postgres.storageSize | quote }}
+            - name: BUS_POSTGRES_STORAGE_CLASS_NAME
+              value: {{ .Values.storageBootstrap.postgres.storageClassName | quote }}
+            - name: BUS_MINIO_OPERATOR_NAMESPACE
+              value: {{ .Values.storageBootstrap.s3.operatorNamespace | quote }}
+            - name: BUS_MINIO_TENANT_NAME
+              value: {{ .Values.storageBootstrap.s3.tenantName | quote }}
+            - name: BUS_S3_ENDPOINT
+              value: {{ printf "http://%s-hl.%s.svc.cluster.local:9000" .Values.storageBootstrap.s3.tenantName .Values.env.platformDataNamespace | quote }}
+            - name: BUS_S3_REGION
+              value: "us-east-1"
+            - name: BUS_MINIO_BUCKET
+              value: {{ .Values.storageBootstrap.s3.bucket | quote }}
+            - name: BUS_MINIO_ROOT_USER
+              value: {{ .Values.storageBootstrap.s3.rootUser | quote }}
+            - name: BUS_MINIO_ROOT_PASSWORD
+              value: {{ .Values.storageBootstrap.s3.rootPassword | quote }}
+            - name: BUS_MINIO_APP_ACCESS_KEY
+              value: {{ .Values.storageBootstrap.s3.appAccessKey | quote }}
+            - name: BUS_MINIO_APP_SECRET_KEY
+              value: {{ .Values.storageBootstrap.s3.appSecretKey | quote }}
+            - name: BUS_MINIO_STORAGE_SIZE
+              value: {{ .Values.storageBootstrap.s3.storageSize | quote }}
+            - name: BUS_MINIO_STORAGE_CLASS_NAME
+              value: {{ .Values.storageBootstrap.s3.storageClassName | quote }}
+          ports:
+            - containerPort: {{ .Values.service.targetPort }}
+              name: http
+          resources:
+            requests:
+              cpu: {{ .Values.resources.platform.requests.cpu | quote }}
+              memory: {{ .Values.resources.platform.requests.memory | quote }}
+            limits:
+              cpu: {{ .Values.resources.platform.limits.cpu | quote }}
+              memory: {{ .Values.resources.platform.limits.memory | quote }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: runtime-data
+              mountPath: /data
+      volumes:
+        - name: runtime-data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: bus-platform-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

@@ -1,0 +1,372 @@
+version: 1
+profiles:
+  - id: kafka-baseline
+    brokerId: kafka
+    mode: baseline
+    strategy: vendor-default-like-single-node
+    operator:
+      name: strimzi
+      version: 0.51.0
+      installMethod: helm
+    deployment:
+      brokerVersion: 4.2.0
+      replicas: 1
+      resources:
+        requests:
+          cpu: "1500m"
+          memory: 3Gi
+        limits:
+          cpu: "1500m"
+          memory: 3Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      kraft: true
+      tls: false
+    resourcePresets:
+      defaults:
+        cpuRequest: "1500m"
+        cpuLimit: "1500m"
+        memoryRequest: 3Gi
+        memoryLimit: 3Gi
+        storageSize: 20Gi
+      durable:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 24Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer:
+        lingerMs: 0
+        batchSizeBytes: 16384
+        compressionType: none
+      consumer:
+        fetchMinBytes: 1
+        fetchMaxWaitMs: 500
+        enableAutoCommit: false
+    semanticMapping:
+      confirmed:
+        producerAcks: "1"
+      persistent:
+        producerAcks: all
+        minInSyncReplicas: 1
+  - id: kafka-optimized
+    brokerId: kafka
+    mode: optimized
+    operator:
+      name: strimzi
+      version: 0.51.0
+      installMethod: helm
+    deployment:
+      brokerVersion: 4.2.0
+      replicas: 1
+      resources:
+        requests:
+          cpu: "3"
+          memory: 5Gi
+        limits:
+          cpu: "3"
+          memory: 5Gi
+      storage:
+        className: local-path
+        size: 24Gi
+      kraft: true
+      tls: false
+    resourcePresets:
+      latency:
+        cpuRequest: "3"
+        cpuLimit: "3"
+        memoryRequest: 5Gi
+        memoryLimit: 5Gi
+        storageSize: 24Gi
+      balanced:
+        cpuRequest: "3"
+        cpuLimit: "3"
+        memoryRequest: 5Gi
+        memoryLimit: 5Gi
+        storageSize: 24Gi
+      throughput:
+        cpuRequest: "5"
+        cpuLimit: "5"
+        memoryRequest: 6Gi
+        memoryLimit: 6Gi
+        storageSize: 32Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer:
+        lingerMs: 0
+        batchSizeBytes: 8192
+        compressionType: none
+      consumer:
+        fetchMinBytes: 1
+        fetchMaxWaitMs: 1
+        enableAutoCommit: false
+        maxPollRecords: 32
+  - id: rabbitmq-baseline
+    brokerId: rabbitmq
+    mode: baseline
+    strategy: vendor-default-like-single-node
+    operator:
+      name: rabbitmq-cluster-operator
+      version: 2.17.0
+      installMethod: manifest
+    deployment:
+      brokerVersion: 4.2.5
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      tls: false
+    resourcePresets:
+      defaults:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 20Gi
+      durable:
+        cpuRequest: "3"
+        cpuLimit: "3"
+        memoryRequest: 6Gi
+        memoryLimit: 6Gi
+        storageSize: 30Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer:
+        publisherConfirms: true
+        mandatory: false
+      consumer:
+        prefetch: 0
+        autoAck: false
+    semanticMapping:
+      transient:
+        queueType: classic
+        durableQueue: false
+        persistentMessages: false
+      persistent:
+        queueType: quorum
+        durableQueue: true
+        persistentMessages: true
+  - id: rabbitmq-optimized
+    brokerId: rabbitmq
+    mode: optimized
+    operator:
+      name: rabbitmq-cluster-operator
+      version: 2.17.0
+      installMethod: manifest
+    deployment:
+      brokerVersion: 4.2.5
+      replicas: 1
+      resources:
+        requests:
+          cpu: "1500m"
+          memory: 3Gi
+        limits:
+          cpu: "1500m"
+          memory: 3Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      tls: false
+    resourcePresets:
+      latency:
+        cpuRequest: "1500m"
+        cpuLimit: "1500m"
+        memoryRequest: 3Gi
+        memoryLimit: 3Gi
+        storageSize: 20Gi
+      balanced:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 20Gi
+      throughput:
+        cpuRequest: "3"
+        cpuLimit: "3"
+        memoryRequest: 6Gi
+        memoryLimit: 6Gi
+        storageSize: 30Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer:
+        publisherConfirms: false
+      consumer:
+        prefetch: 32
+        autoAck: false
+  - id: artemis-baseline
+    brokerId: artemis
+    mode: baseline
+    strategy: vendor-default-like-single-node
+    operator:
+      name: arkmq-org-broker-operator
+      version: 2.1.4
+      installMethod: helm
+    deployment:
+      brokerVersion: 2.44.0
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      tls: false
+    resourcePresets:
+      defaults:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 20Gi
+      durable:
+        cpuRequest: "3"
+        cpuLimit: "3"
+        memoryRequest: 6Gi
+        memoryLimit: 6Gi
+        storageSize: 30Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer: {}
+      consumer: {}
+    semanticMapping:
+      transient:
+        routingType: anycast
+        durableQueue: false
+      persistent:
+        routingType: anycast
+        durableQueue: true
+  - id: artemis-optimized
+    brokerId: artemis
+    mode: optimized
+    operator:
+      name: arkmq-org-broker-operator
+      version: 2.1.4
+      installMethod: helm
+    deployment:
+      brokerVersion: 2.44.0
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      storage:
+        className: local-path
+        size: 24Gi
+      tls: false
+    resourcePresets:
+      latency:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 24Gi
+      balanced:
+        cpuRequest: "2500m"
+        cpuLimit: "2500m"
+        memoryRequest: 5Gi
+        memoryLimit: 5Gi
+        storageSize: 24Gi
+      throughput:
+        cpuRequest: "4"
+        cpuLimit: "4"
+        memoryRequest: 8Gi
+        memoryLimit: 8Gi
+        storageSize: 30Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer: {}
+      consumer: {}
+  - id: nats-baseline
+    brokerId: nats
+    mode: baseline
+    strategy: vendor-default-like-single-node
+    operator:
+      name: nack-controller + nats/nats
+      version: 0.22.2 + 2.12.6
+      installMethod: helm
+    deployment:
+      brokerVersion: 2.12.6
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      tls: false
+    resourcePresets:
+      defaults:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 20Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer: {}
+      consumer: {}
+  - id: nats-optimized
+    brokerId: nats
+    mode: optimized
+    operator:
+      name: nack-controller + nats/nats
+      version: 0.22.2 + 2.12.6
+      installMethod: helm
+    deployment:
+      brokerVersion: 2.12.6
+      replicas: 1
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      storage:
+        className: local-path
+        size: 20Gi
+      tls: false
+    resourcePresets:
+      latency:
+        cpuRequest: "1"
+        cpuLimit: "1"
+        memoryRequest: 2Gi
+        memoryLimit: 2Gi
+        storageSize: 20Gi
+      balanced:
+        cpuRequest: "1500m"
+        cpuLimit: "1500m"
+        memoryRequest: 3Gi
+        memoryLimit: 3Gi
+        storageSize: 20Gi
+      throughput:
+        cpuRequest: "2"
+        cpuLimit: "2"
+        memoryRequest: 4Gi
+        memoryLimit: 4Gi
+        storageSize: 30Gi
+    clientDefaults:
+      cloudEventsMode: structured-json
+      producer: {}
+      consumer: {}

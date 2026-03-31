@@ -1,0 +1,754 @@
+version: 2
+messageSizePresets:
+  control:
+    bytes: 256
+  command:
+    bytes: 1024
+  batch:
+    bytes: 16384
+  stream:
+    bytes: 65536
+  bulk:
+    bytes: 262144
+rateProfiles:
+  latency-steady:
+    kind: fixed
+    targetMessagesPerSecond: 3000
+  balanced-steady:
+    kind: fixed
+    targetMessagesPerSecond: 12000
+  parallel-hot:
+    kind: fixed
+    targetMessagesPerSecond: 24000
+  fanout-steady:
+    kind: fixed
+    targetMessagesPerSecond: 6000
+  durable-steady:
+    kind: fixed
+    targetMessagesPerSecond: 8000
+  kafka-burst:
+    kind: step
+    steps:
+      - offsetSeconds: 0
+        targetMessagesPerSecond: 12000
+      - offsetSeconds: 45
+        targetMessagesPerSecond: 36000
+      - offsetSeconds: 75
+        targetMessagesPerSecond: 18000
+  endurance-burst:
+    kind: step
+    steps:
+      - offsetSeconds: 0
+        targetMessagesPerSecond: 8000
+      - offsetSeconds: 120
+        targetMessagesPerSecond: 16000
+      - offsetSeconds: 210
+        targetMessagesPerSecond: 10000
+  payload-ramp:
+    kind: ramp
+    targetMessagesPerSecond: 1200
+    maxMessagesPerSecond: 6000
+defaults:
+  warmupSeconds: 20
+  measurementSeconds: 120
+  cooldownSeconds: 20
+  iterations: 3
+categories:
+  - id: latency
+    label: Low latency
+    description: Short-queue templates that emphasize p99 stability and end-to-end jitter.
+  - id: throughput
+    label: High throughput
+    description: High-concurrency templates that surface scaling behavior and broker saturation points.
+  - id: fanout
+    label: Fanout
+    description: One-to-many delivery templates for pub/sub and replicated consumer paths.
+  - id: payload
+    label: Large payload
+    description: Payload-heavy templates that surface broker batching, I/O, and buffer sizing behavior.
+  - id: durability
+    label: Durable delivery
+    description: Templates that keep stronger durability semantics in the path.
+recommendedComparison:
+  id: interactive-latency
+  description: Professional low-jitter starting point for cross-broker latency comparisons.
+  topology: spsc
+  producers: 1
+  consumers: 1
+  payloadSizeBytes: 1024
+  rateProfile: latency-steady
+  deliveryIntent: persistent
+  destinationIntent: single-destination
+  setupPreset: latency
+  deploymentMode: normal
+presets:
+  - id: interactive-latency
+    category: latency
+    categoryLabel: Low latency
+    name: Interactive latency
+    description: Single-route low-jitter template for synchronous and user-triggered flows.
+    useCases:
+      - request-reply
+      - notifications
+    topology: spsc
+    producers: 1
+    consumers: 1
+    payloadSizeBytes: 1024
+    rateProfile: latency-steady
+    warmupSeconds: 15
+    measurementSeconds: 90
+    cooldownSeconds: 15
+    deliveryIntent: persistent
+    destinationIntent: single-destination
+    setupPreset: latency
+    deploymentMode: normal
+    brokerTargets:
+      kafka:
+        setupPreset: latency
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 5Gi
+          memoryLimit: 5Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            defaultPartitions: 3
+            numNetworkThreads: 8
+            numIoThreads: 16
+          producer:
+            socketNagleDisable: true
+            maxInFlightRequests: 2
+            deliveryTimeoutMs: 15000
+          consumer:
+            fetchMaxWaitMs: 1
+            maxPollRecords: 16
+            socketNagleDisable: true
+      rabbitmq:
+        setupPreset: latency
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "1500m"
+          cpuLimit: "1500m"
+          memoryRequest: 3Gi
+          memoryLimit: 3Gi
+          storageSize: 20Gi
+          storageClassName: local-path
+        tuning:
+          consumer:
+            prefetch: 16
+      artemis:
+        setupPreset: latency
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "2"
+          cpuLimit: "2"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            journalBufferTimeoutNs: 1000000
+      nats:
+        setupPreset: latency
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "1"
+          cpuLimit: "1"
+          memoryRequest: 2Gi
+          memoryLimit: 2Gi
+          storageSize: 20Gi
+          storageClassName: local-path
+  - id: parallel-tail-latency
+    category: latency
+    categoryLabel: Low latency
+    name: Parallel tail latency
+    description: Parallel producer and consumer template that stresses tail behavior without switching to pure throughput chasing.
+    useCases:
+      - shared work queues
+      - partitioned event processing
+    topology: mpmc
+    producers: 4
+    consumers: 4
+    payloadSizeBytes: 1024
+    rateProfile: balanced-steady
+    warmupSeconds: 20
+    measurementSeconds: 120
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: latency
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            defaultPartitions: 8
+          producer:
+            socketNagleDisable: true
+          consumer:
+            fetchMaxWaitMs: 1
+            maxPollRecords: 32
+      rabbitmq:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+      artemis:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+      nats:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+          replicas: 3
+  - id: kafka-partitioned-burst
+    category: throughput
+    categoryLabel: Partitioned burst
+    name: Partitioned burst throughput
+    description: Partition-heavy burst template for parallel producers and consumers under short high-rate spikes.
+    useCases:
+      - telemetry ingest
+      - append-heavy event streams
+    topology: mpmc
+    producers: 10
+    consumers: 10
+    payloadSizeBytes: 1024
+    rateProfile: kafka-burst
+    warmupSeconds: 20
+    measurementSeconds: 180
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: throughput
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            defaultPartitions: 12
+            defaultReplicationFactor: 3
+            minInSyncReplicas: 2
+            numNetworkThreads: 12
+            numIoThreads: 20
+            numReplicaFetchers: 4
+          producer:
+            lingerMs: 0
+            batchSizeBytes: 131072
+            compressionType: lz4
+            socketNagleDisable: true
+            maxInFlightRequests: 4
+            deliveryTimeoutMs: 20000
+            bufferMemoryBytes: 33554432
+          consumer:
+            fetchMaxWaitMs: 1
+            maxPollRecords: 256
+            fetchMaxBytes: 67108864
+            socketNagleDisable: true
+      rabbitmq:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+        tuning:
+          producer:
+            publisherConfirms: false
+          consumer:
+            prefetch: 400
+      artemis:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 10Gi
+          memoryLimit: 10Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            threadPoolMaxSize: 80
+      nats:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+          replicas: 3
+  - id: parallel-endurance-burst
+    category: throughput
+    categoryLabel: Endurance
+    name: Parallel endurance burst
+    description: Long-duration durable work-queue template with 10 producers, 10 consumers, and a controlled burst window.
+    useCases:
+      - consumer groups
+      - durable work queues
+      - event backlogs
+    topology: mpmc
+    producers: 10
+    consumers: 10
+    payloadSizeBytes: 1024
+    rateProfile: endurance-burst
+    warmupSeconds: 20
+    measurementSeconds: 300
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: throughput
+    deploymentMode: normal
+    brokerTargets:
+      kafka:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            defaultPartitions: 12
+            defaultReplicationFactor: 3
+            minInSyncReplicas: 2
+            numNetworkThreads: 12
+            numIoThreads: 20
+            numReplicaFetchers: 4
+          producer:
+            lingerMs: 0
+            batchSizeBytes: 131072
+            compressionType: lz4
+            socketNagleDisable: true
+            maxInFlightRequests: 4
+            deliveryTimeoutMs: 20000
+            bufferMemoryBytes: 33554432
+          consumer:
+            fetchMaxWaitMs: 1
+            maxPollRecords: 256
+            fetchMaxBytes: 67108864
+            socketNagleDisable: true
+      rabbitmq:
+        setupPreset: throughput
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 5Gi
+          memoryLimit: 5Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+          replicas: 1
+        tuning:
+          broker:
+            defaultQueueType: classic
+            collectStatisticsIntervalMs: 10000
+            tcpBacklog: 512
+          producer:
+            publisherConfirms: false
+          consumer:
+            prefetch: 400
+      artemis:
+        setupPreset: throughput
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 6Gi
+          memoryLimit: 6Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+          replicas: 1
+        tuning:
+          broker:
+            globalMaxSizeMb: 2048
+            journalBufferTimeoutNs: 2000000
+            journalBufferSizeBytes: 1048576
+            addressFullPolicy: BLOCK
+            threadPoolMaxSize: 80
+      nats:
+        setupPreset: throughput
+        deploymentMode: normal
+        resourceConfig:
+          cpuRequest: "2500m"
+          cpuLimit: "2500m"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+          replicas: 1
+  - id: cross-broker-ha-burst
+    category: throughput
+    categoryLabel: Cross-broker
+    name: Clustered 10x10 comparison
+    description: Consistent three-node durable consumer-group scenario for cross-broker comparison with the same payload, flow, and 10x10 producer-consumer shape.
+    useCases:
+      - clustered durable work queues
+      - partitioned event processing
+      - cross-broker comparison
+    topology: mpmc
+    producers: 10
+    consumers: 10
+    payloadSizeBytes: 1024
+    rateProfile: endurance-burst
+    warmupSeconds: 20
+    measurementSeconds: 300
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: balanced
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4352Mi
+          memoryLimit: 4352Mi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            defaultPartitions: 12
+            defaultReplicationFactor: 3
+            minInSyncReplicas: 2
+            numNetworkThreads: 10
+            numIoThreads: 16
+            numReplicaFetchers: 4
+          producer:
+            lingerMs: 0
+            batchSizeBytes: 16384
+            compressionType: none
+            socketNagleDisable: true
+            maxInFlightRequests: 4
+            deliveryTimeoutMs: 20000
+            bufferMemoryBytes: 33554432
+          consumer:
+            fetchMaxWaitMs: 1
+            maxPollRecords: 128
+            fetchMaxBytes: 16777216
+            socketNagleDisable: true
+      rabbitmq:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4352Mi
+          memoryLimit: 4352Mi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            defaultQueueType: quorum
+            collectStatisticsIntervalMs: 10000
+            tcpBacklog: 512
+          producer:
+            publisherConfirms: false
+            heartbeatSec: 30
+            frameMax: 131072
+            connectionTimeoutMs: 15000
+          consumer:
+            prefetch: 256
+            prefetchGlobal: false
+            autoAck: false
+      artemis:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4352Mi
+          memoryLimit: 4352Mi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            journalType: aio
+            globalMaxSizeMb: 1536
+            journalBufferTimeoutNs: 1000000
+            journalBufferSizeBytes: 524288
+            addressFullPolicy: BLOCK
+            threadPoolMaxSize: 64
+      nats:
+        setupPreset: latency
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4352Mi
+          memoryLimit: 4352Mi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            maxPayload: 1048576
+            maxMemoryStore: 4096
+  - id: fanout-distribution
+    category: fanout
+    categoryLabel: Fanout
+    name: Fanout distribution
+    description: Single publisher template for one-to-many delivery and subscriber spread checks.
+    useCases:
+      - pub-sub
+      - replicated notifications
+    topology: fanout
+    producers: 1
+    consumers: 6
+    payloadSizeBytes: 1024
+    rateProfile: fanout-steady
+    warmupSeconds: 15
+    measurementSeconds: 120
+    cooldownSeconds: 15
+    deliveryIntent: persistent
+    destinationIntent: fanout-pubsub
+    setupPreset: balanced
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            defaultPartitions: 6
+      rabbitmq:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+      artemis:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+      nats:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+          replicas: 3
+  - id: large-payload-streaming
+    category: payload
+    categoryLabel: Large payload
+    name: Large payload streaming
+    description: Medium-concurrency template for sustained larger payload movement without turning the test into pure burst noise.
+    useCases:
+      - document events
+      - change data batches
+    topology: mpmc
+    producers: 2
+    consumers: 2
+    payloadSizeBytes: 262144
+    rateProfile: payload-ramp
+    warmupSeconds: 20
+    measurementSeconds: 150
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: balanced
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: balanced
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            messageMaxBytes: 4194304
+            replicaFetchMaxBytes: 16777216
+          producer:
+            maxRequestSizeBytes: 4194304
+      rabbitmq:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+      artemis:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 10Gi
+          memoryLimit: 10Gi
+          storageSize: 36Gi
+          storageClassName: local-path
+      nats:
+        setupPreset: throughput
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "5"
+          cpuLimit: "5"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 32Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            maxPayload: 4194304
+  - id: durable-confirmed-ha
+    category: durability
+    categoryLabel: Durable delivery
+    name: Durable confirmed HA
+    description: Stronger durability semantics with replicated broker state and explicit acknowledgements in the path.
+    useCases:
+      - financial events
+      - critical workflow state
+    topology: mpmc
+    producers: 2
+    consumers: 2
+    payloadSizeBytes: 4096
+    rateProfile: durable-steady
+    warmupSeconds: 20
+    measurementSeconds: 150
+    cooldownSeconds: 20
+    deliveryIntent: persistent
+    destinationIntent: consumer-group
+    setupPreset: durable
+    deploymentMode: ha
+    brokerTargets:
+      kafka:
+        setupPreset: durable
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "3"
+          cpuLimit: "3"
+          memoryRequest: 4Gi
+          memoryLimit: 4Gi
+          storageSize: 28Gi
+          storageClassName: local-path
+          replicas: 3
+        tuning:
+          broker:
+            defaultReplicationFactor: 3
+            minInSyncReplicas: 2
+          producer:
+            acks: all
+            maxInFlightRequests: 1
+      rabbitmq:
+        setupPreset: durable
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 6Gi
+          memoryLimit: 6Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+        tuning:
+          producer:
+            publisherConfirms: true
+      artemis:
+        setupPreset: durable
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 8Gi
+          memoryLimit: 8Gi
+          storageSize: 30Gi
+          storageClassName: local-path
+        tuning:
+          broker:
+            journalType: aio
+      nats:
+        setupPreset: durable
+        deploymentMode: ha
+        resourceConfig:
+          cpuRequest: "4"
+          cpuLimit: "4"
+          memoryRequest: 6Gi
+          memoryLimit: 6Gi
+          storageSize: 24Gi
+          storageClassName: local-path
+          replicas: 3

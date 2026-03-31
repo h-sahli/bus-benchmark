@@ -1,0 +1,36 @@
+cnpg:
+  chartRef: https://github.com/cloudnative-pg/charts/releases/download/cloudnative-pg-v0.27.1/cloudnative-pg-0.27.1.tgz
+  chartVersion: 0.27.1
+  operatorVersion: 1.28.1
+minioOperator:
+  chartRef: minio-operator/operator
+  chartVersion: 7.1.1
+  operatorVersion: 7.1.1
+minioTenant:
+  chartRef: minio-operator/tenant
+  chartVersion: 7.1.1
+  runtimeVersion: 7.1.1
+strimzi:
+  chartRef: strimzi/strimzi-kafka-operator
+  chartVersion: 0.51.0
+  operatorVersion: 0.51.0
+rabbitmq:
+  manifestUrl: https://github.com/rabbitmq/cluster-operator/releases/download/v2.17.0/cluster-operator.yml
+  operatorVersion: 2.17.0
+artemis:
+  chartRef: oci://quay.io/arkmq-org/helm-charts/arkmq-org-broker-operator
+  chartVersion: 2.1.4
+  operatorVersion: 2.1.4
+nats:
+  chartRef: nats/nats
+  chartVersion: 2.12.6
+  runtimeVersion: 2.12.6
+nack:
+  chartRef: nats/nack
+  chartVersion: 0.33.2
+  controllerVersion: 0.22.2
+brokers:
+  kafka: 4.2.0
+  rabbitmq: 4.2.5
+  artemis: 2.44.0
+  nats: 2.12.6

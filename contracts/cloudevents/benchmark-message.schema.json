@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ninefinger9:bus:contracts:cloudevents:benchmark-message:v1",
+  "title": "BenchmarkMessageCloudEvent",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "source",
+    "type",
+    "specversion",
+    "time",
+    "datacontenttype",
+    "contractversion",
+    "benchmarkrunid",
+    "scenarioid",
+    "brokerid",
+    "produceragentid",
+    "payloadsizebytes",
+    "serializedeventsizebytes",
+    "producerseq",
+    "testmode",
+    "topologymode",
+    "durabilitymode",
+    "configmode",
+    "destinationkind",
+    "destinationname",
+    "producersendstartns",
+    "producerinvokepublishns",
+    "data_base64"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^urn:[a-z0-9][a-z0-9:-]*$"
+    },
+    "type": {
+      "type": "string",
+      "const": "io.ninefinger9.benchmark.message.v1"
+    },
+    "specversion": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "subject": {
+      "type": "string"
+    },
+    "dataschema": {
+      "type": "string"
+    },
+    "datacontenttype": {
+      "type": "string",
+      "const": "application/octet-stream"
+    },
+    "contractversion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "benchmarkrunid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "scenarioid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "brokerid": {
+      "type": "string",
+      "enum": ["kafka", "rabbitmq", "artemis"]
+    },
+    "produceragentid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "receiverid": {
+      "type": "string"
+    },
+    "payloadsizebytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "serializedeventsizebytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "producerseq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "testmode": {
+      "type": "string",
+      "enum": ["measurement", "smoke", "validation"]
+    },
+    "topologymode": {
+      "type": "string"
+    },
+    "durabilitymode": {
+      "type": "string"
+    },
+    "configmode": {
+      "type": "string",
+      "enum": ["baseline", "optimized"]
+    },
+    "destinationkind": {
+      "type": "string",
+      "enum": ["topic", "queue", "exchange", "address", "shard"]
+    },
+    "destinationname": {
+      "type": "string",
+      "minLength": 1
+    },
+    "routinghint": {
+      "type": "string"
+    },
+    "partitionhint": {
+      "type": "string"
+    },
+    "producersendstartns": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "producerinvokepublishns": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "producerackns": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "data_base64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    }
+  }
+}

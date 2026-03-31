@@ -1,0 +1,75 @@
+# NATS JetStream – 3-node HA cluster optimized
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-optimized-ha
+  labels:
+    app: nats-optimized-ha
+    benchmark.ninefinger9.io/broker-id: nats
+spec:
+  selector:
+    app: nats-optimized-ha
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: cluster
+      port: 6222
+      targetPort: 6222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats-optimized-ha
+  labels:
+    app: nats-optimized-ha
+    benchmark.ninefinger9.io/broker-id: nats
+spec:
+  serviceName: nats-optimized-ha
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nats-optimized-ha
+  template:
+    metadata:
+      labels:
+        app: nats-optimized-ha
+        benchmark.ninefinger9.io/broker-id: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.11.3-alpine
+          args:
+            - "--jetstream"
+            - "--store_dir=/data"
+            - "--cluster_name=bench-cluster"
+            - "--cluster=nats://0.0.0.0:6222"
+            - "--routes=nats://nats-optimized-ha-0.nats-optimized-ha:6222,nats://nats-optimized-ha-1.nats-optimized-ha:6222,nats://nats-optimized-ha-2.nats-optimized-ha:6222"
+            - "--write_deadline=2s"
+          ports:
+            - containerPort: 4222
+            - containerPort: 6222
+            - containerPort: 8222
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 20Gi

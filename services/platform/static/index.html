@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Concerto Bus Benchmark</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <meta name="bus-build-id" content="__BUS_BUILD_ID__" />
+    <link rel="stylesheet" href="/static/styles.css?v=__BUS_ASSET_VERSION__" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div class="header-copy">
+          <img src="/static/logo.png" alt="Concerto" class="header-logo" />
+          <div>
+            <p class="kicker">Messaging benchmark platform</p>
+            <h1>Bus Benchmark</h1>
+          </div>
+        </div>
+        <div class="ambient-lights" aria-hidden="true">
+          <span class="light light-a"></span>
+          <span class="light light-b"></span>
+          <span class="light light-c"></span>
+        </div>
+        <div class="header-side">
+          <div class="header-stats">
+            <div>
+              <span>Time</span>
+              <strong id="serverTime">-</strong>
+            </div>
+            <div>
+              <span>Runs</span>
+              <strong id="runCount">0</strong>
+            </div>
+            <div>
+              <span>Live</span>
+              <strong id="activeCount">0</strong>
+            </div>
+          </div>
+          <div id="operatorStatus" class="operator-strip" aria-live="polite"></div>
+        </div>
+      </header>
+
+      <div id="flashMessage" class="flash hidden" role="status" aria-live="polite"></div>
+
+      <nav class="tabs" role="tablist" aria-label="Tabs">
+        <button class="tab active" role="tab" aria-selected="true" data-tab="benchmark">Benchmark</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="runs">Runs</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="results">Results</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="reports">Reports</button>
+      </nav>
+
+      <section class="tab-panel active" data-panel="benchmark">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Benchmark</h2>
+            </div>
+            <div class="controls">
+              <button id="stepBackButton" class="button">Back</button>
+              <button id="stepNextButton" class="button primary">Next</button>
+            </div>
+          </div>
+
+          <ol id="wizardStepper" class="wizard-stepper">
+            <li data-step="1"><span>1</span> Setup</li>
+            <li data-step="2"><span>2</span> Test</li>
+            <li data-step="3"><span>3</span> Run</li>
+          </ol>
+
+          <form id="benchmarkForm" class="wizard-form">
+            <input type="hidden" id="brokerIdInput" name="brokerId" value="kafka" />
+            <input type="hidden" id="brokerTuningHidden" name="brokerTuning" value="" />
+
+            <article class="wizard-step" data-step="1">
+              <div class="section-head">
+                <h3>Setup</h3>
+              </div>
+              <label class="template-select">
+                <span>
+                  Broker
+                  <button
+                    type="button"
+                    class="info-dot"
+                    data-tip="Broker availability and control-plane status."
+                  >
+                    i
+                  </button>
+                </span>
+                <select id="brokerSelect" name="brokerSelect"></select>
+              </label>
+              <div id="brokerCards" class="broker-cards"></div>
+
+              <div class="grid-3">
+                <label>
+                  <span>
+                    Starting profile
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="Default tuning set for the selected broker."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <select name="configMode" id="configModeSelect">
+                    <option value="latency" selected>Performance</option>
+                    <option value="throughput">Throughput</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="durable">Durable</option>
+                    <option value="defaults">Standard</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>
+                    Topology
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="Single node or 3-node cluster."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <select name="deploymentMode" id="deploymentModeSelect">
+                    <option value="normal" selected>Single node</option>
+                    <option value="ha">3-node cluster</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>
+                    Protocol
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="Protocol for the selected broker."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <select name="protocol" id="protocolSelect"></select>
+                </label>
+              </div>
+
+              <div class="controls">
+                <div class="scope-tabs" id="configScopeTabs">
+                  <button class="button scope-tab active" type="button" data-scope="broker">Broker</button>
+                  <button class="button scope-tab" type="button" data-scope="producer">Producer</button>
+                  <button class="button scope-tab" type="button" data-scope="consumer">Consumer</button>
+                </div>
+              </div>
+
+              <div id="configEditor" class="config-editor"></div>
+
+              <details class="resource-config-panel" id="resourceConfigPanel">
+                <summary class="resource-config-toggle">Resources <span class="resource-config-hint">(per broker)</span></summary>
+                <div class="resource-config-grid" id="resourceConfigGrid"></div>
+              </details>
+            </article>
+
+            <article class="wizard-step" data-step="2">
+              <div class="section-head">
+                <h3>Test</h3>
+              </div>
+
+              <label class="template-select">
+                <span>
+                  Quick start
+                    <button type="button" class="info-dot" data-tip="Apply a saved scenario.">
+                    i
+                  </button>
+                </span>
+                <select name="scenarioId" id="scenarioSelect"></select>
+              </label>
+              <p id="scenarioSummaryHint" class="field-note"></p>
+
+              <div class="grid-4">
+                <label class="duration-primary">
+                  <span>
+                    Test length (s)
+                    <button type="button" class="info-dot" data-tip="Main measured part of the run. This is the core test duration.">i</button>
+                  </span>
+                  <input id="measurementSecondsInput" name="measurementSeconds" type="number" min="1" value="60" required />
+                </label>
+                <label>
+                  <span>
+                    Warmup (s)
+                    <button type="button" class="info-dot" data-tip="Traffic sent before measurement starts. Warmup samples are not counted.">i</button>
+                  </span>
+                  <input id="warmupSecondsInput" name="warmupSeconds" type="number" min="0" value="10" required />
+                </label>
+                <label>
+                  <span>
+                    Cooldown (s)
+                    <button type="button" class="info-dot" data-tip="Drain time after the measurement window ends.">i</button>
+                  </span>
+                  <input id="cooldownSecondsInput" name="cooldownSeconds" type="number" min="0" value="10" required />
+                </label>
+                <label>
+                  <span>
+                    Start at
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="Leave empty to start immediately. Use local time."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <input id="startsAtInput" name="startsAt" type="datetime-local" />
+                </label>
+              </div>
+
+              <div class="grid-5">
+                <label>
+                  <span>
+                    Message rate (msg/s)
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="The rate the producer side tries to send."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <input id="messageRateInput" name="messageRate" type="number" min="1" value="5000" required />
+                </label>
+                <label>
+                  <span>
+                    Message flow
+                    <button
+                      type="button"
+                      class="info-dot"
+                      data-tip="Uses the selected message rate as the base rate. Some flows automatically add a higher temporary peak."
+                    >
+                      i
+                    </button>
+                  </span>
+                  <select id="rateProfileSelect" name="rateProfile" required>
+                    <option value="constant" selected>Steady</option>
+                    <option value="ramp-up">Ramp up</option>
+                    <option value="ramp-down">Ramp down</option>
+                    <option value="step-up">Step up</option>
+                    <option value="burst">Burst</option>
+                  </select>
+                </label>
+                <label>
+                  <span>
+                    Payload size
+                    <button type="button" class="info-dot" data-tip="Enter payload bytes here. Summaries and reports render the value as KiB or MiB for readability.">i</button>
+                  </span>
+                  <input id="messageSizeBytesInput" name="messageSizeBytes" type="number" min="1" value="1024" required />
+                </label>
+                <label>
+                  <span>
+                    Producers
+                    <button type="button" class="info-dot" data-tip="Producer worker count launched for the run.">i</button>
+                  </span>
+                  <input id="producersInput" name="producers" type="number" min="1" value="1" required />
+                </label>
+                <label>
+                  <span>
+                    Consumers
+                    <button type="button" class="info-dot" data-tip="Consumer worker count launched for the run.">i</button>
+                  </span>
+                  <input id="consumersInput" name="consumers" type="number" min="1" value="1" required />
+                </label>
+              </div>
+              <p id="loadShapeSummaryHint" class="field-note"></p>
+
+              <div class="grid-2">
+                <div class="inline-card">
+                  <span>Duration</span>
+                  <strong id="windowSummaryValue">Immediate start</strong>
+                  <p id="windowSummaryHint" class="hint"></p>
+                </div>
+                <div class="inline-card">
+                  <span>Scale</span>
+                  <strong id="scalingSummaryValue">1 producer + 1 consumer = 2 workers</strong>
+                  <p id="scalingSummaryHint" class="hint"></p>
+                </div>
+              </div>
+            </article>
+
+            <article class="wizard-step" data-step="3">
+              <div class="section-head">
+                <h3>Run</h3>
+              </div>
+              <div class="run-entry-row">
+                <div id="finalRunSummaryCard" class="inline-card summary-card"></div>
+                <label class="run-name-compact">
+                  <span>Run name</span>
+                  <input id="runNameInput" name="name" maxlength="120" required placeholder="rabbitmq-latency-1" />
+                </label>
+              </div>
+              <div class="actions">
+                <button id="startBenchmarkButton" class="button primary" type="submit" disabled>Start</button>
+              </div>
+            </article>
+          </form>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="runs">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Runs</h2>
+            </div>
+            <div class="controls">
+              <button id="resetAllButton" class="button danger" type="button">Clear all runs</button>
+            </div>
+          </div>
+          <div id="runList" class="run-list"></div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="results">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Results</h2>
+            </div>
+            <div class="controls">
+              <button id="resultsRefreshButton" class="button" type="button">Refresh</button>
+              <button id="exportResultsButton" class="button" type="button">Export selected</button>
+              <button id="exportAllResultsButton" class="button" type="button">Export all</button>
+              <button id="importResultsButton" class="button" type="button">Import results</button>
+              <input id="importResultsInput" type="file" accept="application/json,.json" hidden />
+            </div>
+          </div>
+          <div class="viz-layout">
+            <div id="vizRunPicker" class="run-picker run-picker-results"></div>
+            <div id="vizSummary" class="metric-strip"></div>
+            <div class="viz-grid">
+              <article class="viz-card viz-card-primary">
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="latencyCardTitle">End-to-end latency over measured time</h3>
+                    <p id="latencyCardCaption" class="viz-caption">Measured window</p>
+                  </div>
+                  <div id="latencyCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="latencyChart" height="300"></canvas>
+              </article>
+              <article class="viz-card viz-card-secondary">
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="throughputCardTitle">Throughput during measured time</h3>
+                    <p id="throughputCardCaption" class="viz-caption">Measured window</p>
+                  </div>
+                  <div id="throughputCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="throughputChart" height="300"></canvas>
+              </article>
+              <article class="viz-card viz-card-secondary">
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="percentileCardTitle">Percentile snapshot</h3>
+                    <p id="percentileCardCaption" class="viz-caption">Window summary</p>
+                  </div>
+                  <div id="percentileCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="sizeImpactChart" height="300"></canvas>
+              </article>
+              <article class="viz-card viz-card-secondary">
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="distributionCardTitle">Latency distribution</h3>
+                    <p id="distributionCardCaption" class="viz-caption">Latency buckets</p>
+                  </div>
+                  <div id="distributionCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="successChart" height="300"></canvas>
+              </article>
+              <article class="viz-card viz-card-secondary">
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="spreadCardTitle">Tail spread over measured time</h3>
+                    <p id="spreadCardCaption" class="viz-caption">Tail relative to median</p>
+                  </div>
+                  <div id="spreadCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="scalingChart" height="300"></canvas>
+              </article>
+              <article id="resourceVizCard" class="viz-card viz-card-wide" hidden>
+                <div class="viz-card-head">
+                  <div>
+                    <h3 id="resourceCardTitle">Resource context</h3>
+                    <p id="resourceCardCaption" class="viz-caption">Resource sample</p>
+                  </div>
+                  <div id="resourceCardMeta" class="viz-meta-tags"></div>
+                </div>
+                <canvas id="resourceChart" height="300"></canvas>
+              </article>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="tab-panel" data-panel="reports">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Reports</h2>
+            </div>
+          </div>
+          <div class="report-layout">
+            <aside class="report-sidebar">
+              <div id="reportRunPicker" class="run-picker run-picker-report"></div>
+            </aside>
+            <div class="report-main">
+              <div class="report-controls">
+                <label>
+                  <span>Title</span>
+                  <input id="reportTitleInput" value="Concerto Bus Benchmark Report" />
+                </label>
+                <div id="reportSectionPicker" class="report-sections"></div>
+                <div class="actions">
+                  <button id="buildReportButton" class="button primary" type="button">Refresh table</button>
+                  <button id="exportPdfButton" class="button" type="button">Generate PDF</button>
+                </div>
+              </div>
+              <article id="reportPreview" class="report-preview">
+                <p class="empty">Select runs to build a report.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=__BUS_ASSET_VERSION__" defer></script>
+  </body>
+</html>

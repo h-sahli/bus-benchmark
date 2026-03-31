@@ -1,0 +1,62 @@
+# NATS JetStream – single-node baseline (no operator, plain Deployment)
+# Manifest fallback only. The primary runtime path uses the official nats/nats Helm chart.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats-baseline
+  labels:
+    app: nats-baseline
+    benchmark.ninefinger9.io/broker-id: nats
+spec:
+  selector:
+    app: nats-baseline
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+  clusterIP: None
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-baseline
+  labels:
+    app: nats-baseline
+    benchmark.ninefinger9.io/broker-id: nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats-baseline
+  template:
+    metadata:
+      labels:
+        app: nats-baseline
+        benchmark.ninefinger9.io/broker-id: nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.11.3-alpine
+          args:
+            - "--jetstream"
+            - "--store_dir=/data"
+            - "--max_payload=1MB"
+          ports:
+            - containerPort: 4222
+            - containerPort: 8222
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

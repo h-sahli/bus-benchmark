@@ -1,0 +1,29 @@
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: rabbitmq-optimized
+  namespace: bench-rabbitmq
+  labels:
+    benchmark.ninefinger9.io/broker: rabbitmq
+    benchmark.ninefinger9.io/mode: optimized
+    benchmark.ninefinger9.io/deployment-mode: ha
+spec:
+  replicas: 3
+  image: rabbitmq:4.2.5-management
+  persistence:
+    storage: 20Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  rabbitmq:
+    additionalConfig: |
+      consumer_timeout = 1800000
+      collect_statistics_interval = 5000
+      vm_memory_high_watermark.relative = 0.7
+      management.tcp.port = 15672
+      heartbeat = 30
+      channel_max = 4096

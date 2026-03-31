@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bench-kafka-operator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rabbitmq-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bench-artemis-operator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bench-nats-operator
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bench-platform

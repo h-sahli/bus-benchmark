@@ -1,0 +1,20 @@
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: rabbitmq-baseline
+  namespace: bench-rabbitmq
+  labels:
+    benchmark.ninefinger9.io/broker: rabbitmq
+    benchmark.ninefinger9.io/mode: baseline
+spec:
+  replicas: 1
+  image: rabbitmq:4.2.5-management
+  persistence:
+    storage: 20Gi
+  resources:
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi

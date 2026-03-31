@@ -1,0 +1,12 @@
+{{- $accessUrl := include "bus-platform.accessUrl" . | trim -}}
+{{- if $accessUrl }}
+Concerto Bus Benchmark address:
+  {{ $accessUrl }}
+{{- else if .Values.ingress.enabled }}
+Ingress is enabled but no final public host has been resolved yet.
+
+Set one explicitly with:
+  --set ingress.host=<real-host> --set ingress.hostMode=manual
+{{- else }}
+Service is private. Expose it with a local access mode or an ingress host.
+{{- end }}

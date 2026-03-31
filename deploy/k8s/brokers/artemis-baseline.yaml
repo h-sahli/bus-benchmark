@@ -1,0 +1,46 @@
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemis
+metadata:
+  name: artemis-baseline
+  namespace: bench-artemis
+  labels:
+    benchmark.ninefinger9.io/broker: artemis
+    benchmark.ninefinger9.io/mode: baseline
+spec:
+  version: 2.44.0
+  deploymentPlan:
+    size: 1
+    persistenceEnabled: true
+    clustered: false
+    requireLogin: true
+    storage:
+      size: 20Gi
+    resources:
+      requests:
+        cpu: "2"
+        memory: 4Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  acceptors:
+    - name: amqp
+      port: 5672
+      protocols: amqp
+      expose: false
+---
+apiVersion: broker.amq.io/v1beta1
+kind: ActiveMQArtemisAddress
+metadata:
+  name: artemis-baseline-benchmark-events
+  namespace: bench-artemis
+  labels:
+    benchmark.ninefinger9.io/broker: artemis
+    benchmark.ninefinger9.io/mode: baseline
+spec:
+  applyToCrNames:
+    - artemis-baseline
+  addressName: benchmark.events
+  queueName: benchmark.events
+  routingType: anycast
+  queueConfiguration:
+    durable: true

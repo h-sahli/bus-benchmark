@@ -1,0 +1,117 @@
+namespaceOverride: bench-platform
+
+images:
+  platform:
+    repository: ninefinger9/bus-platform
+    tag: latest
+    pullPolicy: IfNotPresent
+  agent:
+    repository: ninefinger9/bus-benchmark-agent
+    tag: latest
+
+imagePullSecrets: []
+agentImagePullSecret: ""
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+
+resources:
+  platform:
+    requests:
+      cpu: "750m"
+      memory: 2Gi
+    limits:
+      cpu: "750m"
+      memory: 2Gi
+  benchmarkJobs:
+    producer:
+      requests:
+        cpu: "250m"
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    consumer:
+      requests:
+        cpu: "100m"
+        memory: 256Mi
+      limits:
+        cpu: "500m"
+        memory: 1280Mi
+  finalizer:
+    requests:
+      cpu: "500m"
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 6Gi
+
+serviceAccount:
+  create: true
+  name: bus-platform-control
+
+rbac:
+  create: true
+  clusterAdminBinding: true
+
+service:
+  name: bus-platform
+  port: 80
+  targetPort: 8000
+  type: ClusterIP
+  nodePort: 30080
+  localAccessHost: localhost
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+  hostMode: auto
+  host: ""
+  bootstrapHost: bus-platform-pending.invalid
+  autoDnsSuffix: sslip.io
+  clusterSlug: ""
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: false
+    secretName: ""
+
+env:
+  storageMode: local
+  busDbPath: /data/bus.db
+  enableClusterActions: "true"
+  enableOperatorBootstrap: "true"
+  accessUrl: ""
+  buildId: dev
+  assetVersion: dev
+  agentStartBarrierSeconds: "20"
+  resourcePollSeconds: "2"
+  benchmarkJobTimeoutSeconds: "1800"
+  benchmarkAgentImagePullPolicy: IfNotPresent
+  platformDataNamespace: bench-platform-data
+
+storageBootstrap:
+  postgres:
+    operatorNamespace: bench-cnpg-operator
+    clusterName: bus-platform-db
+    database: bus_platform
+    username: bus_platform
+    password: bus-platform-password
+    superuserPassword: postgres-platform-password
+    instances: 1
+    storageSize: 8Gi
+    storageClassName: ""
+  s3:
+    operatorNamespace: bench-minio-operator
+    tenantName: bus-platform-store
+    bucket: bus-platform-artifacts
+    rootUser: busplatform
+    rootPassword: busplatform-minio-password
+    appAccessKey: bus-platform-app
+    appSecretKey: bus-platform-app-secret
+    storageSize: 20Gi
+    storageClassName: ""
