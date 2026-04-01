@@ -559,6 +559,40 @@ def test_job_result_source_path_prefers_structured_output(monkeypatch, tmp_path:
     assert fallback_calls == []
 
 
+def test_job_result_source_path_keeps_empty_structured_output_for_accounting(monkeypatch, tmp_path: Path) -> None:
+    automation = ClusterAutomation(REPO_ROOT)
+    automation.shared_artifact_dir = tmp_path / "artifacts"
+    structured_path = Path(
+        automation._agent_structured_output_path(
+            "12345678-abcd-efgh-ijkl-1234567890ab",
+            "consumer",
+            1,
+        )
+    )
+    structured_path.parent.mkdir(parents=True, exist_ok=True)
+    structured_path.write_text("", encoding="utf-8")
+
+    fallback_calls: list[tuple[str, str, str]] = []
+
+    monkeypatch.setattr(
+        automation,
+        "_job_logs_to_file_safe",
+        lambda namespace, job_name, container_name: fallback_calls.append((namespace, job_name, container_name)) or "",
+    )
+
+    source = automation._job_result_source_path(
+        run_id="12345678-abcd-efgh-ijkl-1234567890ab",
+        role="consumer",
+        ordinal=1,
+        namespace="bench-run-12345678",
+        job_name="12345678-consumer-1",
+        container_name="consumer",
+    )
+
+    assert source == str(structured_path)
+    assert fallback_calls == []
+
+
 def test_benchmark_jobs_use_shared_runtime_volume() -> None:
     automation = ClusterAutomation(REPO_ROOT)
     documents, consumer_jobs, producer_jobs, _ = automation._build_agent_jobs(

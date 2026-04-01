@@ -419,6 +419,24 @@ def test_consumer_idle_exit_waits_for_window_end(monkeypatch) -> None:
     )
 
 
+def test_consumer_stop_after_adds_grace_to_window_end() -> None:
+    idle_exit_not_before_ns = 1_000_000_000
+
+    assert agent.consumer_stop_after_ns(
+        idle_exit_not_before_ns,
+        idle_exit_seconds=7,
+    ) == 8_000_000_000
+
+
+def test_should_force_exit_consumer_when_grace_deadline_passes(monkeypatch) -> None:
+    deadline = 8_000_000_000
+    monkeypatch.setattr(agent.time, "time_ns", lambda: deadline - 1)
+    assert not agent.should_force_exit_consumer(stop_after_ns=deadline)
+
+    monkeypatch.setattr(agent.time, "time_ns", lambda: deadline)
+    assert agent.should_force_exit_consumer(stop_after_ns=deadline)
+
+
 def test_is_retryable_connect_error_matches_transient_connection_failures() -> None:
     assert agent.is_retryable_connect_error(RuntimeError("Connection refused to all addresses"))
     assert agent.is_retryable_connect_error(RuntimeError("connection timed out"))
@@ -705,6 +723,82 @@ def test_rabbitmq_consume_uses_streaming_consumer(monkeypatch) -> None:
     assert acked == [7]
     assert cancel_calls == 1
     assert any(call.get("queue") == "benchmark.events" for call in calls if "queue" in call)
+
+
+def test_rabbitmq_consumer_stops_at_deadline_even_with_busy_queue(monkeypatch) -> None:
+    acked: list[int] = []
+    cancel_calls = 0
+
+    class DummyMethod:
+        routing_key = "benchmark.events"
+        redelivered = False
+        delivery_tag = 7
+
+    class DummyChannel:
+        def queue_declare(self, queue, durable):
+            return None
+
+        def basic_qos(self, prefetch_count, global_qos):
+            return None
+
+        def consume(self, queue, auto_ack, inactivity_timeout):
+            while True:
+                yield DummyMethod(), SimpleNamespace(headers={}), b"payload"
+
+        def basic_ack(self, delivery_tag):
+            acked.append(delivery_tag)
+
+        def basic_nack(self, delivery_tag, requeue):
+            raise AssertionError(f"unexpected nack {delivery_tag} {requeue}")
+
+        def cancel(self):
+            nonlocal cancel_calls
+            cancel_calls += 1
+
+        def close(self):
+            return None
+
+    class DummyConnection:
+        def __init__(self, _parameters):
+            self._channel = DummyChannel()
+
+        def channel(self):
+            return self._channel
+
+        def close(self):
+            return None
+
+    calls = {"count": 0}
+    stop_after_ns = 6_000_000_000
+
+    def fake_time_ns():
+        calls["count"] += 1
+        return stop_after_ns - 1 if calls["count"] == 1 else stop_after_ns
+
+    monkeypatch.setattr(agent, "ensure_dependency", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(agent, "BlockingConnection", DummyConnection)
+    monkeypatch.setattr(agent, "URLParameters", lambda _broker_url: object())
+    monkeypatch.setattr(agent.time, "time_ns", fake_time_ns)
+
+    result = agent.RabbitMqAdapter.consume(
+        broker_url="amqp://guest:guest@rabbitmq:5672/%2F",
+        queue_name="benchmark.events",
+        prefetch=256,
+        prefetch_global=False,
+        auto_ack=False,
+        handler=lambda _body, _transport: {
+            "event_id": "event-1",
+            "producer_id": "producer-1",
+            "sequence": 1,
+        },
+        message_limit=0,
+        idle_exit_seconds=5,
+        idle_exit_not_before_ns=1_000_000_000,
+    )
+
+    assert result.received == 1
+    assert acked == [7]
+    assert cancel_calls == 1
 
 
 def test_recent_id_window_stays_bounded() -> None:

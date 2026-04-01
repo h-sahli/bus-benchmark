@@ -3433,7 +3433,9 @@ class ClusterAutomation:
         structured_output_path = Path(
             self._agent_structured_output_path(run_id, role, ordinal)
         )
-        if self._wait_for_file_content(structured_output_path):
+        if structured_output_path.exists():
+            if self._wait_for_file_content(structured_output_path):
+                return str(structured_output_path)
             return str(structured_output_path)
         return self._job_logs_to_file_safe(namespace, job_name, container_name)
 

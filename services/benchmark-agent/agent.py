@@ -292,6 +292,20 @@ def consumer_idle_exit_not_before_ns(
     return base_ns + total_window_ns
 
 
+def consumer_stop_after_ns(
+    idle_exit_not_before_ns: int | None,
+    *,
+    idle_exit_seconds: int,
+) -> int | None:
+    if idle_exit_not_before_ns is None:
+        return None
+    return idle_exit_not_before_ns + (max(0, int(idle_exit_seconds)) * 1_000_000_000)
+
+
+def should_force_exit_consumer(*, stop_after_ns: int | None) -> bool:
+    return stop_after_ns is not None and time.time_ns() >= stop_after_ns
+
+
 def should_exit_consumer_idle(
     *,
     idle_exit_not_before_ns: int | None,
@@ -301,6 +315,22 @@ def should_exit_consumer_idle(
     if idle_exit_not_before_ns is not None and time.time_ns() < idle_exit_not_before_ns:
         return False
     return time.monotonic() - last_activity >= idle_exit_seconds
+
+
+def should_exit_consumer(
+    *,
+    stop_after_ns: int | None,
+    idle_exit_not_before_ns: int | None,
+    idle_exit_seconds: int,
+    last_activity: float,
+) -> bool:
+    if should_force_exit_consumer(stop_after_ns=stop_after_ns):
+        return True
+    return should_exit_consumer_idle(
+        idle_exit_not_before_ns=idle_exit_not_before_ns,
+        idle_exit_seconds=idle_exit_seconds,
+        last_activity=last_activity,
+    )
 
 
 class RawRecordChunkBuffer:
@@ -744,6 +774,10 @@ class KafkaAdapter:
         socket_nagle_disable: bool,
     ) -> ConsumerResult:
         ensure_dependency("kafka", KafkaConsumer)
+        stop_after_ns = consumer_stop_after_ns(
+            idle_exit_not_before_ns,
+            idle_exit_seconds=idle_exit_seconds,
+        )
         consume_timeout_seconds = min(
             0.25,
             max(0.02, (max(1, int(fetch_max_wait_ms)) / 1000.0) * 2.0),
@@ -779,12 +813,15 @@ class KafkaAdapter:
 
         try:
             while not STOP_REQUESTED and (message_limit <= 0 or received < message_limit):
+                if should_force_exit_consumer(stop_after_ns=stop_after_ns):
+                    break
                 records = consumer.consume(
                     num_messages=max(1, max_poll_records),
                     timeout=consume_timeout_seconds,
                 )
                 if not records:
-                    if should_exit_consumer_idle(
+                    if should_exit_consumer(
+                        stop_after_ns=stop_after_ns,
                         idle_exit_not_before_ns=idle_exit_not_before_ns,
                         idle_exit_seconds=idle_exit_seconds,
                         last_activity=last_activity,
@@ -792,6 +829,8 @@ class KafkaAdapter:
                         break
                     continue
                 for record in records:
+                    if should_force_exit_consumer(stop_after_ns=stop_after_ns):
+                        break
                     if record is None:
                         continue
                     if record.error():
@@ -919,6 +958,10 @@ class RabbitMqAdapter:
         last_seq_by_producer: dict[str, int] = {}
         last_activity = time.monotonic()
         parse_error_logs = 0
+        stop_after_ns = consumer_stop_after_ns(
+            idle_exit_not_before_ns,
+            idle_exit_seconds=idle_exit_seconds,
+        )
 
         try:
             consumer_stream = channel.consume(
@@ -927,10 +970,15 @@ class RabbitMqAdapter:
                 inactivity_timeout=1,
             )
             for method_frame, properties, body in consumer_stream:
-                if STOP_REQUESTED or (message_limit > 0 and received >= message_limit):
+                if (
+                    STOP_REQUESTED
+                    or should_force_exit_consumer(stop_after_ns=stop_after_ns)
+                    or (message_limit > 0 and received >= message_limit)
+                ):
                     break
                 if method_frame is None:
-                    if should_exit_consumer_idle(
+                    if should_exit_consumer(
+                        stop_after_ns=stop_after_ns,
                         idle_exit_not_before_ns=idle_exit_not_before_ns,
                         idle_exit_seconds=idle_exit_seconds,
                         last_activity=last_activity,
@@ -1120,9 +1168,15 @@ class ArtemisAdapter:
         last_seq_by_producer: dict[str, int] = {}
         last_activity = time.monotonic()
         parse_error_logs = 0
+        stop_after_ns = consumer_stop_after_ns(
+            idle_exit_not_before_ns,
+            idle_exit_seconds=idle_exit_seconds,
+        )
 
         try:
             while not STOP_REQUESTED and (message_limit <= 0 or received < message_limit):
+                if should_force_exit_consumer(stop_after_ns=stop_after_ns):
+                    break
                 if receiver is None:
                     try:
                         receiver = open_receiver()
@@ -1133,7 +1187,8 @@ class ArtemisAdapter:
                 try:
                     message = receiver.receive(timeout=1)
                 except (TimeoutError, ProtonTimeout):
-                    if should_exit_consumer_idle(
+                    if should_exit_consumer(
+                        stop_after_ns=stop_after_ns,
                         idle_exit_not_before_ns=idle_exit_not_before_ns,
                         idle_exit_seconds=idle_exit_seconds,
                         last_activity=last_activity,
@@ -1415,12 +1470,19 @@ class NatsJetStreamAdapter:
                 last_seq_by_producer: dict[str, int] = {}
                 last_activity = time.monotonic()
                 parse_error_logs = 0
+                stop_after_ns = consumer_stop_after_ns(
+                    idle_exit_not_before_ns,
+                    idle_exit_seconds=idle_exit_seconds,
+                )
 
                 while not STOP_REQUESTED and (message_limit <= 0 or received < message_limit):
+                    if should_force_exit_consumer(stop_after_ns=stop_after_ns):
+                        break
                     try:
                         message = await subscription.next_msg(timeout=1)
                     except (TimeoutError, NatsTimeoutError):
-                        if should_exit_consumer_idle(
+                        if should_exit_consumer(
+                            stop_after_ns=stop_after_ns,
                             idle_exit_not_before_ns=idle_exit_not_before_ns,
                             idle_exit_seconds=idle_exit_seconds,
                             last_activity=last_activity,
