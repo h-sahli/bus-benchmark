@@ -136,7 +136,7 @@ def test_jetstream_config_helpers_use_file_storage_and_replication(monkeypatch) 
     monkeypatch.setattr(agent, "nats_js_api", fake_api)
 
     stream_config = agent.jetstream_stream_config("BENCHMARK-EVENTS", "benchmark.events", 3)
-    consumer_config = agent.jetstream_consumer_config(3)
+    consumer_config = agent.jetstream_consumer_config(3, max_ack_pending=2048)
 
     assert stream_config["name"] == "BENCHMARK-EVENTS"
     assert stream_config["subjects"] == ["benchmark.events"]
@@ -145,6 +145,7 @@ def test_jetstream_config_helpers_use_file_storage_and_replication(monkeypatch) 
     assert consumer_config["ack_policy"] == "explicit"
     assert consumer_config["deliver_policy"] == "new"
     assert consumer_config["num_replicas"] == 3
+    assert consumer_config["max_ack_pending"] == 2048
 
 
 def test_nats_adapter_publish_uses_replicated_stream_config(monkeypatch) -> None:

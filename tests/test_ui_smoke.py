@@ -16,12 +16,99 @@ playwright_sync = pytest.importorskip("playwright.sync_api")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+UNSAFE_BROWSER_PORTS = {
+    1,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    20,
+    21,
+    22,
+    23,
+    25,
+    37,
+    42,
+    43,
+    53,
+    69,
+    77,
+    79,
+    87,
+    95,
+    101,
+    102,
+    103,
+    104,
+    109,
+    110,
+    111,
+    113,
+    115,
+    117,
+    119,
+    123,
+    135,
+    137,
+    139,
+    143,
+    161,
+    179,
+    389,
+    427,
+    465,
+    512,
+    513,
+    514,
+    515,
+    526,
+    530,
+    531,
+    532,
+    540,
+    548,
+    554,
+    556,
+    563,
+    587,
+    601,
+    636,
+    989,
+    990,
+    993,
+    995,
+    1719,
+    1720,
+    1723,
+    2049,
+    3659,
+    4045,
+    4190,
+    5060,
+    5061,
+    6000,
+    6566,
+    6665,
+    6666,
+    6667,
+    6668,
+    6669,
+    6679,
+    6697,
+    10080,
+}
 
 
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+    while True:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+        if port not in UNSAFE_BROWSER_PORTS:
+            return port
 
 
 def wait_for_health(base_url: str, timeout_seconds: float = 30.0) -> None:
@@ -186,6 +273,7 @@ def test_guided_ui_flow(ui_server: str) -> None:
         page.get_by_role("tab", name="Benchmark").wait_for()
         assert page.locator("#startBenchmarkButton").is_disabled()
         page.locator("#brokerSelect").wait_for()
+        expect(page.locator("#scheduleModeSelect")).to_have_value("sequential")
 
         page.locator("#brokerSelect").select_option("rabbitmq")
         page.locator("#configModeSelect").select_option("latency")

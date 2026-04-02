@@ -706,6 +706,72 @@ def test_payload_limit_policy_strict_rejects_large_kafka_messages(tmp_path: Path
         assert "expands to about" in response.json()["detail"]
 
 
+def test_payload_limit_policy_auto_adjusts_large_rabbitmq_messages(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "payload-rabbitmq-auto.db", cluster_automation=FakeClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "large rabbitmq payload",
+                "brokerId": "rabbitmq",
+                "messageSizeBytes": 13_000_000,
+                "transportOptions": {"payloadLimitHandling": "auto"},
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 200
+        run = response.json()
+        assert run["transportOptions"]["payloadLimitHandling"] == "auto-adjusted"
+        assert run["transportOptions"]["estimatedWireMessageBytes"] > 16 * 1024 * 1024
+        assert run["brokerTuning"]["broker"]["maxMessageSizeBytes"] > 16 * 1024 * 1024
+
+
+def test_payload_limit_policy_strict_rejects_large_rabbitmq_messages(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "payload-rabbitmq-strict.db", cluster_automation=FakeClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "strict rabbitmq payload",
+                "brokerId": "rabbitmq",
+                "messageSizeBytes": 13_000_000,
+                "transportOptions": {"payloadLimitHandling": "strict"},
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 422
+        assert "RabbitMQ max message size" in response.json()["detail"]
+
+
+def test_payload_limit_policy_auto_adjusts_artemis_reject_threshold(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "payload-artemis-auto.db", cluster_automation=FakeClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "large artemis payload",
+                "brokerId": "artemis",
+                "messageSizeBytes": 900000,
+                "brokerTuning": {
+                    "broker": {
+                        "maxSizeBytesRejectThresholdBytes": 1048576,
+                    },
+                    "producer": {},
+                    "consumer": {},
+                },
+                "transportOptions": {"payloadLimitHandling": "auto"},
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 200
+        run = response.json()
+        assert run["transportOptions"]["payloadLimitHandling"] == "auto-adjusted"
+        assert run["brokerTuning"]["broker"]["maxSizeBytesRejectThresholdBytes"] > 1048576
+
+
 def test_sequential_run_waits_behind_active_execution(tmp_path: Path) -> None:
     automation = SlowClusterAutomation()
     with TestClient(create_app(tmp_path / "sequential.db", cluster_automation=automation)) as client:
@@ -1327,6 +1393,45 @@ def test_detached_finalizer_is_not_launched_before_run_window_finishes(tmp_path:
         run_id = response.json()["id"]
         time.sleep(0.5)
         assert automation.run_finalizer_state(run_id) == "not_found"
+
+
+def test_detached_finalizer_completion_advances_sequential_queue(tmp_path: Path) -> None:
+    db_path = tmp_path / "detached-finalizer-queue.db"
+    automation = DetachedFinalizerClusterAutomation(db_path)
+    with TestClient(create_app(db_path, cluster_automation=automation)) as test_client:
+        first = test_client.post(
+            "/api/runs",
+            json={
+                "name": "detached queue first",
+                "brokerId": "kafka",
+                "scheduleMode": "sequential",
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert first.status_code == 200
+        second = test_client.post(
+            "/api/runs",
+            json={
+                "name": "detached queue second",
+                "brokerId": "kafka",
+                "scheduleMode": "sequential",
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert second.status_code == 200
+        queued = second.json()
+        assert queued["status"] == "waiting"
+        assert queued["queueState"] == "waiting"
+
+        first_run = wait_for_run_status(test_client, first.json()["id"], "completed", timeout_seconds=10.0)
+        assert first_run["status"] == "completed"
+        second_run = wait_for_run_status(test_client, queued["id"], "completed", timeout_seconds=12.0)
+        assert second_run["status"] == "completed"
+        assert automation.run_finalizer_state(second_run["id"]) == "succeeded"
 
 
 def test_detached_finalizer_failure_preserves_structured_output_for_recovery(tmp_path: Path) -> None:

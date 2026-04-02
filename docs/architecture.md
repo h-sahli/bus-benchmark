@@ -58,9 +58,23 @@ External storage is explicit:
 
 The web pod is no longer the only place where results can be finalized. Benchmark jobs write material to durable storage, and a detached finalizer job completes aggregation independently of the web pod lifecycle.
 
+## Cluster bootstrap model
+
+Helm deploys the runtime workload. Kustomize bootstraps cluster-scoped prerequisites in explicit overlays:
+
+- `deploy/kustomize/cluster/brokers`: broker operator namespaces plus `bench-platform`
+- `deploy/kustomize/cluster/platform-data`: CloudNativePG, MinIO, and `bench-platform-data` namespaces
+- `deploy/kustomize/cluster/all`: full bootstrap overlay used by the standard deploy path
+
+This keeps bootstrap scope aligned with the explicit runtime phases:
+
+- broker operators bootstrap
+- platform-data operators bootstrap
+- platform-data services bootstrap
+
 ## Scheduling and producer flow
 
-- `parallel` mode tries to start immediately and fails if another run is already executing
+- immediate-start mode (`parallel`) tries to start immediately and fails if another run is already executing
 - `sequential` mode persists the request first, then moves runs through `queued` and `waiting` until the control plane is idle
 - producer jobs scale their own resource envelope from the requested rate, burst peak, producer count, and payload size
 - producer results persist a pipeline profile so payload generation, event encoding, and publish-call costs can be compared directly

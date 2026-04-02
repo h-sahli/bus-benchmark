@@ -631,12 +631,17 @@ def jetstream_stream_config(stream_name: str, destination: str, replicas: int) -
     )
 
 
-def jetstream_consumer_config(replicas: int) -> Any:
+def jetstream_consumer_config(replicas: int, max_ack_pending: int | None = None) -> Any:
     ensure_dependency("nats", nats_js_api)
+    kwargs: dict[str, Any] = {
+        "ack_policy": nats_js_api.AckPolicy.EXPLICIT,
+        "deliver_policy": nats_js_api.DeliverPolicy.NEW,
+        "num_replicas": normalize_jetstream_replicas(replicas),
+    }
+    if max_ack_pending not in {None, "", 0}:
+        kwargs["max_ack_pending"] = max(1, int(max_ack_pending))
     return nats_js_api.ConsumerConfig(
-        ack_policy=nats_js_api.AckPolicy.EXPLICIT,
-        deliver_policy=nats_js_api.DeliverPolicy.NEW,
-        num_replicas=normalize_jetstream_replicas(replicas),
+        **kwargs,
     )
 
 
@@ -1292,6 +1297,7 @@ class NatsJetStreamAdapter:
         jetstream_replicas: int = 1,
         stream_managed_by: str = "client",
         connect_timeout_seconds: int = 60,
+        max_pending_publishes: int = 1024,
     ) -> None:
         ensure_dependency("nats", nats)
         self.broker_url = broker_url
@@ -1305,7 +1311,10 @@ class NatsJetStreamAdapter:
         self.completed_deliveries: list[dict[str, Any]] = []
         self.pending_deliveries: list[tuple[str, str, asyncio.Task[Any], dict[str, Any]]] = []
         self._ensured_destinations: set[str] = set()
-        self.max_pending_publishes = max(8, int(os.environ.get("JETSTREAM_MAX_PENDING_PUBLISHES", "1024")))
+        configured_pending_publishes = max_pending_publishes
+        if configured_pending_publishes in {None, 0}:
+            configured_pending_publishes = int(os.environ.get("JETSTREAM_MAX_PENDING_PUBLISHES", "1024"))
+        self.max_pending_publishes = max(8, int(configured_pending_publishes))
         self._connect()
 
     def _run_async(self, awaitable: Any) -> Any:
@@ -1455,6 +1464,7 @@ class NatsJetStreamAdapter:
         connect_timeout_seconds: int,
         jetstream_replicas: int,
         stream_managed_by: str = "client",
+        max_ack_pending: int = 0,
     ) -> ConsumerResult:
         ensure_dependency("nats", nats)
         loop = asyncio.new_event_loop()
@@ -1486,7 +1496,7 @@ class NatsJetStreamAdapter:
                         await js.update_stream(config=stream_config)
                 subscribe_kwargs = {
                     "durable": consumer_group or None,
-                    "config": jetstream_consumer_config(normalized_replicas),
+                    "config": jetstream_consumer_config(normalized_replicas, max_ack_pending=max_ack_pending),
                     "manual_ack": True,
                 }
                 subscribe_kwargs = {
@@ -1667,6 +1677,7 @@ def build_producer_adapter(args: argparse.Namespace, producer_id: str) -> Any:
             jetstream_replicas=args.jetstream_replicas,
             stream_managed_by=args.jetstream_stream_managed_by,
             connect_timeout_seconds=args.connect_timeout_seconds,
+            max_pending_publishes=args.max_pending_publishes,
         ),
     }
     return producer_factories[args.broker]()
@@ -1754,6 +1765,7 @@ def consume_messages(
             connect_timeout_seconds=args.connect_timeout_seconds,
             jetstream_replicas=args.jetstream_replicas,
             stream_managed_by=args.jetstream_stream_managed_by,
+            max_ack_pending=args.max_ack_pending,
         ),
     }
     return consumer_runners[args.broker]()
@@ -2283,6 +2295,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(os.environ.get("CONSUMER_SOCKET_NAGLE_DISABLE", "false")).lower() in {"1", "true", "yes", "y"},
     )
     parser.add_argument("--jetstream-replicas", type=int, default=int(os.environ.get("JETSTREAM_REPLICAS", "1")))
+    parser.add_argument("--max-pending-publishes", type=int, default=int(os.environ.get("JETSTREAM_MAX_PENDING_PUBLISHES", "1024")))
+    parser.add_argument("--max-ack-pending", type=int, default=int(os.environ.get("JETSTREAM_MAX_ACK_PENDING", "0")))
     parser.add_argument(
         "--jetstream-stream-managed-by",
         choices=["client", "nack"],

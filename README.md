@@ -78,13 +78,13 @@ The portability contract is now:
 
 1. Open the UI.
 2. In `Benchmark`, choose the broker, setup, and test window.
-3. Start one run immediately or queue it in sequential mode.
+3. Start one run immediately if the platform is idle, or place it in the sequential queue.
 4. The platform creates a dedicated run namespace, deploys the selected broker runtime, starts producer and consumer jobs, and stores measured results.
 5. A detached finalizer job aggregates stored artifacts after the run window completes.
 6. In `Results`, review completed runs.
 7. In `Reports`, review the report preview and export a PDF from completed runs.
 
-Only one run executes at a time. Parallel mode requires an open slot. Sequential mode keeps later runs in `queued` and `waiting` states until the active benchmark completes. When a run finishes or is stopped, the run namespace is deleted. Operators stay installed.
+Only one run executes at a time. The sequential queue is platform-native: later runs stay in `queued` and `waiting` until the active benchmark completes. When a run finishes or is stopped, the run namespace is deleted. Operators stay installed.
 
 ## Benchmark controls
 
@@ -118,12 +118,13 @@ Each scenario template carries broker-specific defaults for:
 ## Deployment layout
 
 - `deploy/charts/bus-platform`: Helm chart for the runtime
-- `deploy/kustomize/cluster/portable`: cluster bootstrap overlay
+- `deploy/kustomize/cluster/brokers`: broker-operator bootstrap overlay
+- `deploy/kustomize/cluster/platform-data`: CNPG, MinIO, and platform-data namespace bootstrap overlay
+- `deploy/kustomize/cluster/all`: combined cluster bootstrap overlay used by the full deploy path
 - `deploy/k8s/brokers`: broker manifests and compatibility fallbacks
 - `deploy/k8s/operators/versions.yaml`: pinned broker, operator, and runtime chart versions
 
-Helm is used for the runtime lifecycle. Kustomize is used for cluster bootstrap and future overlay-friendly cluster customization.
-The runtime uses Helm. Cluster bootstrap stays in Kustomize. Control planes are intentionally mixed by upstream packaging model:
+Helm is used for the runtime lifecycle. Kustomize is used for cluster bootstrap in three explicit scopes: broker operators, platform-data control planes, and the combined full-cluster overlay. Control planes are intentionally mixed by upstream packaging model:
 
 - Strimzi: Helm chart
 - RabbitMQ Cluster Operator: upstream manifest

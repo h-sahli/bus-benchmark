@@ -187,11 +187,11 @@
                 <label>
                   <span>
                     Scheduler
-                    <button type="button" class="info-dot" data-tip="Parallel starts immediately and fails if another run is active. Sequential queues the run and starts it when the previous run completes.">i</button>
+                    <button type="button" class="info-dot" data-tip="Immediate start launches only if the platform is idle. Sequential queue saves the run now and starts it automatically when the previous run completes.">i</button>
                   </span>
                   <select id="scheduleModeSelect" name="scheduleMode">
-                    <option value="parallel" selected>Parallel</option>
-                    <option value="sequential">Sequential queue</option>
+                    <option value="sequential" selected>Sequential queue</option>
+                    <option value="parallel">Immediate start</option>
                   </select>
                 </label>
                 <label class="duration-primary">

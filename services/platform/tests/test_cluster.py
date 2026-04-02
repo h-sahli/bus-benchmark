@@ -149,7 +149,7 @@ def test_patch_artemis_manifest_updates_apply_to_names() -> None:
         broker_id="artemis",
         config_mode="optimized",
         deployment_mode="ha",
-        broker_tuning={"broker": {"globalMaxSizeMb": 2048}},
+        broker_tuning={"broker": {"globalMaxSizeMb": 2048, "maxSizeBytesRejectThresholdBytes": 2097152}},
     )
 
     broker_doc = next(document for document in documents if document["kind"] == "ActiveMQArtemis")
@@ -159,6 +159,7 @@ def test_patch_artemis_manifest_updates_apply_to_names() -> None:
     assert broker_doc["metadata"]["name"] == broker_name
     assert address_doc["spec"]["applyToCrNames"] == [broker_name]
     assert "global-max-size=2048m" in broker_doc["spec"]["brokerProperties"]
+    assert "address-setting.#.max-size-bytes-reject-threshold=2097152" in broker_doc["spec"]["brokerProperties"]
 
 
 def test_patch_rabbitmq_manifest_adds_additional_config() -> None:
@@ -168,7 +169,7 @@ def test_patch_rabbitmq_manifest_adds_additional_config() -> None:
         broker_id="rabbitmq",
         config_mode="optimized",
         deployment_mode="ha",
-        broker_tuning={"broker": {"defaultQueueType": "quorum", "consumerTimeoutMs": 60000}},
+        broker_tuning={"broker": {"defaultQueueType": "quorum", "consumerTimeoutMs": 60000, "maxMessageSizeBytes": 33554432}},
     )
 
     rabbit_doc = next(document for document in documents if document["kind"] == "RabbitmqCluster")
@@ -177,6 +178,7 @@ def test_patch_rabbitmq_manifest_adds_additional_config() -> None:
     additional_config = rabbit_doc["spec"]["rabbitmq"]["additionalConfig"]
     assert "default_queue_type = quorum" in additional_config
     assert "consumer_timeout = 60000" in additional_config
+    assert "max_message_size = 33554432" in additional_config
 
 
 def test_patch_nats_manifest_rewrites_identity_and_resources() -> None:
@@ -768,7 +770,7 @@ def test_ensure_operators_bootstraps_platform_dependencies(monkeypatch) -> None:
     probe_counter = {"count": 0}
 
     monkeypatch.setattr(automation, "bootstrap_tools_available", lambda: True)
-    monkeypatch.setattr(automation, "_apply_cluster_bootstrap_overlay", lambda: calls.append("overlay"))
+    monkeypatch.setattr(automation, "_apply_cluster_bootstrap_overlay", lambda scope="all": calls.append(f"overlay:{scope}"))
     monkeypatch.setattr(automation, "_ensure_strimzi_operator", lambda: calls.append("strimzi"))
     monkeypatch.setattr(automation, "_ensure_rabbitmq_operator", lambda: calls.append("rabbitmq"))
     monkeypatch.setattr(automation, "_ensure_artemis_operator", lambda: calls.append("artemis"))
@@ -820,7 +822,7 @@ def test_ensure_operators_bootstraps_platform_dependencies(monkeypatch) -> None:
 
     assert status["ready"] is True
     assert calls == [
-        "overlay",
+        "overlay:all",
         "strimzi",
         "rabbitmq",
         "artemis",
@@ -832,6 +834,15 @@ def test_ensure_operators_bootstraps_platform_dependencies(monkeypatch) -> None:
         "postgres",
         "objectStore",
     ]
+
+
+def test_cluster_bootstrap_overlay_paths_are_scope_specific() -> None:
+    automation = ClusterAutomation(REPO_ROOT)
+
+    assert automation._cluster_bootstrap_overlay_path("brokers").name == "brokers"
+    assert automation._cluster_bootstrap_overlay_path("platform-data").name == "platform-data"
+    assert automation._cluster_bootstrap_overlay_path("platform-services").name == "platform-data"
+    assert automation._cluster_bootstrap_overlay_path("all").name == "all"
 
 
 def test_probe_operator_states_marks_legacy_rabbitmq_namespace_not_ready(monkeypatch) -> None:
@@ -982,6 +993,50 @@ def test_build_agent_jobs_passes_nats_jetstream_replica_settings() -> None:
     assert "--jetstream-replicas=3" in producer_args
     assert "--jetstream-stream-managed-by=nack" in consumer_args
     assert "--jetstream-stream-managed-by=nack" in producer_args
+
+
+def test_build_agent_jobs_passes_nats_pipeline_tuning_args() -> None:
+    automation = ClusterAutomation(REPO_ROOT)
+    automation._wait_for_nats_runtime = lambda _namespace, _broker_name: "nats-12345678"
+    documents, consumer_jobs, producer_jobs, _ = automation._build_agent_jobs(
+        run_id="12345678-abcd-efgh-ijkl-1234567890ab",
+        broker_id="nats",
+        scenario_id=None,
+        config_mode="optimized",
+        deployment_mode="ha",
+        namespace="bench-run-12345678",
+        broker_tuning={
+            "broker": {},
+            "producer": {"maxPendingPublishes": 4096},
+            "consumer": {"maxAckPending": 8192},
+        },
+        message_rate=10,
+        message_size_bytes=512,
+        producers=1,
+        consumers=1,
+        warmup_seconds=5,
+        measurement_seconds=10,
+        cooldown_seconds=5,
+        transport_options={"rateProfileKind": "constant", "peakMessageRate": 10},
+        resource_config={"replicas": 3},
+    )
+
+    consumer_job = next(
+        document
+        for document in documents
+        if document.get("kind") == "Job" and document.get("metadata", {}).get("name") == consumer_jobs[0]
+    )
+    producer_job = next(
+        document
+        for document in documents
+        if document.get("kind") == "Job" and document.get("metadata", {}).get("name") == producer_jobs[0]
+    )
+
+    consumer_args = consumer_job["spec"]["template"]["spec"]["containers"][0]["args"]
+    producer_args = producer_job["spec"]["template"]["spec"]["containers"][0]["args"]
+
+    assert "--max-pending-publishes=4096" in producer_args
+    assert "--max-ack-pending=8192" in consumer_args
 
 
 def test_rabbitmq_connection_runtime_embeds_connection_string_from_broker_namespace(monkeypatch) -> None:

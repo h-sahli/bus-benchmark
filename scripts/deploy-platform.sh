@@ -361,7 +361,7 @@ if ! import_local_image_if_supported "${agent_image}"; then
 fi
 
 log "Deploying platform runtime"
-kubectl apply -k "${REPO_ROOT}/deploy/kustomize/cluster/portable"
+kubectl apply -k "${REPO_ROOT}/deploy/kustomize/cluster/all"
 if ! helm -n bench-platform status bus-platform >/dev/null 2>&1; then
   log "Cleaning pre-Helm runtime resources before Helm install"
   kubectl -n bench-platform delete deployment/bus-platform service/bus-platform ingress/bus-platform serviceaccount/bus-platform-control --ignore-not-found=true >/dev/null 2>&1 || true

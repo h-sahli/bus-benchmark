@@ -240,8 +240,10 @@ profiles:
         storageSize: 30Gi
     clientDefaults:
       cloudEventsMode: structured-json
-      producer: {}
-      consumer: {}
+      producer:
+        maxPendingPublishes: 1024
+      consumer:
+        maxAckPending: 1024
     semanticMapping:
       transient:
         routingType: anycast
@@ -291,8 +293,10 @@ profiles:
         storageSize: 30Gi
     clientDefaults:
       cloudEventsMode: structured-json
-      producer: {}
-      consumer: {}
+      producer:
+        maxPendingPublishes: 4096
+      consumer:
+        maxAckPending: 4096
   - id: nats-baseline
     brokerId: nats
     mode: baseline

@@ -95,6 +95,7 @@ const CONFIG_FIELDS = {
       { key: "clusterPartitionHandling", label: "Cluster partition handling", help: "How the cluster reacts to partitions. This affects availability behavior more than steady-state latency.", type: "select", options: [{ value: "ignore", label: "ignore" }, { value: "pause_minority", label: "pause_minority" }, { value: "autoheal", label: "autoheal" }], defaultValue: "pause_minority", tunedValue: "autoheal" },
       { key: "handshakeTimeoutMs", label: "Handshake timeout ms", help: "Maximum time allowed for AMQP handshake. It affects connection setup, not message-path latency.", type: "number", min: 1000, step: 1000, defaultValue: 10000, tunedValue: 5000 },
       { key: "tcpBacklog", label: "TCP backlog", help: "Pending TCP accept queue size. This helps absorb bursts of client connections during startup.", type: "number", min: 32, step: 32, defaultValue: 128, tunedValue: 256, throughputValue: 512 },
+      { key: "maxMessageSizeBytes", label: "Max message bytes", help: "Broker-side maximum message size. Structured CloudEvents inflate payload size, so keep this above the estimated wire size for large-message tests.", type: "number", min: 1024, step: 1024, defaultValue: 16777216, tunedValue: 16777216, throughputValue: 33554432 },
     ],
     producer: [
       { key: "publisherConfirms", label: "Publisher confirms", help: "Wait for broker publish confirms. This adds confirmation latency, but it measures durable delivery more honestly.", type: "boolean", defaultValue: true, tunedValue: false, durableValue: true },
@@ -122,6 +123,7 @@ const CONFIG_FIELDS = {
       { key: "addressFullPolicy", label: "Address full policy", help: "What Artemis does when an address is full. `BLOCK` makes backpressure visible immediately.", type: "select", options: [{ value: "PAGE", label: "PAGE" }, { value: "BLOCK", label: "BLOCK" }, { value: "FAIL", label: "FAIL" }, { value: "DROP", label: "DROP" }], defaultValue: "PAGE", tunedValue: "BLOCK" },
       { key: "pageSizeBytes", label: "Page size bytes", help: "Page size used when messages spill to disk. Smaller pages can make pressure visible sooner.", type: "number", min: 1024, step: 1024, defaultValue: 10485760, tunedValue: 4194304, throughputValue: 10485760 },
       { key: "threadPoolMaxSize", label: "Thread pool max size", help: "Maximum broker worker threads. More threads can help under fan-in load, but too many increase scheduling overhead.", type: "number", min: 1, step: 1, defaultValue: 30, tunedValue: 60, throughputValue: 80 },
+      { key: "maxSizeBytesRejectThresholdBytes", label: "Reject threshold bytes", help: "Address-level size threshold that rejects oversize traffic once paging pressure is reached. Use it to keep large-message tests explicit instead of relying on implicit broker behavior.", type: "number", min: 1024, step: 1024, defaultValue: 0, tunedValue: 0, throughputValue: 0 },
     ],
     producer: [],
     consumer: [],
@@ -131,8 +133,12 @@ const CONFIG_FIELDS = {
       { key: "maxPayload", label: "Max payload bytes", help: "Maximum message payload size.", type: "number", min: 1024, step: 1024, defaultValue: 1048576, tunedValue: 1048576 },
       { key: "maxMemoryStore", label: "Max memory store MB", help: "Maximum memory for JetStream storage.", type: "number", min: 64, step: 64, defaultValue: 2048, tunedValue: 2048 },
     ],
-    producer: [],
-    consumer: [],
+    producer: [
+      { key: "maxPendingPublishes", label: "Max pending publishes", help: "Maximum asynchronous publish acknowledgements the producer pipelines before it waits. Higher values help JetStream stay busy under replicated durable load.", type: "number", min: 8, step: 8, defaultValue: 1024, tunedValue: 4096, throughputValue: 8192, balancedValue: 2048 },
+    ],
+    consumer: [
+      { key: "maxAckPending", label: "Max ack pending", help: "Maximum outstanding unacknowledged deliveries JetStream allows for the consumer. Higher values can improve throughput when handlers are fast.", type: "number", min: 0, step: 128, defaultValue: 0, tunedValue: 4096, throughputValue: 8192, balancedValue: 2048 },
+    ],
   },
 };
 
@@ -968,6 +974,8 @@ function profileValueForField(field, profile, brokerId) {
   if (brokerId === "rabbitmq" && field.key === "prefetch") return readPath(profile, "clientDefaults.consumer.prefetch", field.defaultValue);
   if (brokerId === "rabbitmq" && field.key === "autoAck") return readPath(profile, "clientDefaults.consumer.autoAck", field.defaultValue);
   if (brokerId === "artemis" && field.key === "journalType") return readPath(profile, "deployment.journalType", field.defaultValue);
+  if (brokerId === "nats" && field.key === "maxPendingPublishes") return readPath(profile, "clientDefaults.producer.maxPendingPublishes", field.defaultValue);
+  if (brokerId === "nats" && field.key === "maxAckPending") return readPath(profile, "clientDefaults.consumer.maxAckPending", field.defaultValue);
   return field.defaultValue;
 }
 
@@ -1268,7 +1276,7 @@ function updateWindowSummary() {
   const total = warmup + measure + cooldown;
   const startValue = elements.startsAtInput.value;
   const totalLabel = `${formatDuration(total)} total`;
-  const scheduleLabel = elements.scheduleModeSelect.value === "sequential" ? "Queued sequentially" : "Parallel start";
+  const scheduleLabel = elements.scheduleModeSelect.value === "sequential" ? "Queued sequentially" : "Immediate start";
 
   if (!startValue) {
     elements.windowSummaryValue.textContent = totalLabel;
@@ -1345,7 +1353,7 @@ function renderFinalRunSummary() {
   elements.finalRunSummaryCard.innerHTML = `
     <span>Recap</span>
     <strong>${brokerLabel(state.selectedBrokerId)}</strong>
-    <p class="hint">${compactList([setupLabel(elements.configModeSelect.value), deploymentLabel(elements.deploymentModeSelect.value), elements.protocolSelect.value, elements.scheduleModeSelect.value === "sequential" ? "Sequential queue" : "Parallel start"])}</p>
+    <p class="hint">${compactList([setupLabel(elements.configModeSelect.value), deploymentLabel(elements.deploymentModeSelect.value), elements.protocolSelect.value, elements.scheduleModeSelect.value === "sequential" ? "Sequential queue" : "Immediate start"])}</p>
     <p class="hint">${compactList([loadProfileLabel(), `${formatBytesCompact(elements.messageSizeBytesInput.value)} payload`, `${producers} producer${producers > 1 ? "s" : ""}`, `${consumers} consumer${consumers > 1 ? "s" : ""}`])}</p>
     <p class="hint">${compactList([`${formatDuration(total)} total`, `Measure ${formatDuration(measure)}`, `Warmup ${formatDuration(warmup)}`, `Cooldown ${formatDuration(cooldown)}`, `Start ${startLabel}`])}</p>
     <p class="hint">${compactList([rangeEnd > 0 ? `Message range ${rangeStart.toLocaleString()} to ${rangeEnd.toLocaleString()}` : `Message range starts at ${rangeStart.toLocaleString()} and keeps increasing`, payloadPolicy, payloadGeneration])}</p>
@@ -1829,7 +1837,7 @@ function loadRunIntoBenchmark(run) {
 
   elements.runNameInput.value = suggestReuseRunName(run);
   elements.startsAtInput.value = "";
-  elements.scheduleModeSelect.value = String(run.scheduleMode || "parallel").trim() || "parallel";
+  elements.scheduleModeSelect.value = String(run.scheduleMode || "sequential").trim() || "sequential";
   elements.messageRateInput.value = String(run.messageRate || 1);
   elements.messageSizeBytesInput.value = String(run.messageSizeBytes || 1024);
   elements.messageRangeStartInput.value = String(run.messageRangeStart || 1);
@@ -3079,7 +3087,7 @@ async function submitBenchmark(event) {
     const activeRun = activeExecutionRun();
     showFlash(
       blockingRun()
-        ? `Wait for ${activeRun.name} to finish cleanup before starting another run in parallel mode.`
+        ? `Wait for ${activeRun.name} to finish cleanup, or switch this run to sequential queue.`
         : (!brokerReadyForRun(state.selectedBrokerId)
             ? `Control plane for ${brokerLabel(state.selectedBrokerId)} is not ready yet.`
             : "Complete the required fields first."),
@@ -3100,7 +3108,7 @@ async function submitBenchmark(event) {
     scenarioId: elements.scenarioSelect.value || null,
     configMode: effectiveConfigMode(elements.configModeSelect.value || "latency"),
     deploymentMode: elements.deploymentModeSelect.value || "normal",
-    scheduleMode: elements.scheduleModeSelect.value || "parallel",
+    scheduleMode: elements.scheduleModeSelect.value || "sequential",
     protocol: elements.protocolSelect.value,
     startsAt: startsAtRaw ? new Date(startsAtRaw).toISOString() : null,
     messageRate: Number(elements.messageRateInput.value),

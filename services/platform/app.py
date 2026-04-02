@@ -56,6 +56,7 @@ RATE_PROFILE_KINDS = {"constant", "ramp-up", "ramp-down", "step-up", "burst"}
 SCHEDULE_MODES = {"parallel", "sequential"}
 QUEUE_STATES = {"queued", "waiting"}
 ACTIVE_EXECUTION_STATUSES = {"scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}
+CONTROL_PLANE_RECONCILE_SECONDS = max(1.0, float(os.getenv("BUS_CONTROL_PLANE_RECONCILE_SECONDS", "2")))
 RESOURCE_SETUP_FALLBACK = {
     "baseline": "defaults",
     "optimized": "latency",
@@ -64,6 +65,8 @@ BUILD_ID_PLACEHOLDER = "__BUS_BUILD_ID__"
 ASSET_VERSION_PLACEHOLDER = "__BUS_ASSET_VERSION__"
 RUN_EXPORT_KIND = "concerto-bus-runs-export"
 RUN_EXPORT_VERSION = 1
+RABBITMQ_DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+ARTEMIS_DEFAULT_LARGE_MESSAGE_THRESHOLD_BYTES = 100 * 1024
 
 
 def derived_peak_message_rate(message_rate: int, profile_kind: str) -> int:
@@ -380,6 +383,55 @@ def apply_payload_limit_policy(
                 )
             broker_values["maxPayload"] = max(current_limit, headroom_limit)
             diagnostics["effectivePayloadLimitBytes"] = broker_values["maxPayload"]
+            diagnostics["autoAdjusted"] = True
+    elif broker_id == "rabbitmq":
+        broker_values = tuning.setdefault("broker", {})
+        current_limit = _nested_int(
+            tuning,
+            "broker",
+            "maxMessageSizeBytes",
+            default=RABBITMQ_DEFAULT_MAX_MESSAGE_BYTES,
+        )
+        diagnostics["effectivePayloadLimitBytes"] = current_limit
+        if envelope_bytes > current_limit:
+            if handling == "strict":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Payload size {message_size_bytes} bytes expands to about {envelope_bytes} bytes on wire, "
+                        f"which exceeds the current RabbitMQ max message size of {current_limit} bytes."
+                    ),
+                )
+            broker_values["maxMessageSizeBytes"] = max(current_limit, headroom_limit)
+            diagnostics["effectivePayloadLimitBytes"] = broker_values["maxMessageSizeBytes"]
+            diagnostics["autoAdjusted"] = True
+    elif broker_id == "artemis":
+        broker_values = tuning.setdefault("broker", {})
+        configured_limit = _nested_int(
+            tuning,
+            "broker",
+            "maxSizeBytesRejectThresholdBytes",
+            default=0,
+        )
+        large_message_threshold = _nested_int(
+            tuning,
+            "broker",
+            "minLargeMessageSizeBytes",
+            default=ARTEMIS_DEFAULT_LARGE_MESSAGE_THRESHOLD_BYTES,
+        )
+        diagnostics["effectivePayloadLimitBytes"] = configured_limit or None
+        diagnostics["largeMessageThresholdBytes"] = large_message_threshold
+        if configured_limit > 0 and envelope_bytes > configured_limit:
+            if handling == "strict":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Payload size {message_size_bytes} bytes expands to about {envelope_bytes} bytes on wire, "
+                        f"which exceeds the current Artemis reject threshold of {configured_limit} bytes."
+                    ),
+                )
+            broker_values["maxSizeBytesRejectThresholdBytes"] = max(configured_limit, headroom_limit)
+            diagnostics["effectivePayloadLimitBytes"] = broker_values["maxSizeBytesRejectThresholdBytes"]
             diagnostics["autoAdjusted"] = True
     else:
         diagnostics["effectivePayloadLimitBytes"] = None
@@ -788,6 +840,7 @@ def create_app(
     lifecycle_engine = RunLifecycleEngine()
     runtime_init_lock = threading.Lock()
     scheduler_lock = threading.Lock()
+    maintenance_loop_started = threading.Event()
     runtime_state: dict[str, Any] = {
         "ready": False,
         "initializing": False,
@@ -818,6 +871,7 @@ def create_app(
                 recover_interrupted_runs()
                 reconcile_run_namespaces()
                 kick_sequential_scheduler()
+                start_runtime_maintenance_loop()
             with runtime_init_lock:
                 runtime_state["initializing"] = False
                 runtime_state["error"] = None
@@ -837,6 +891,29 @@ def create_app(
             status_code=503,
             detail=f"Runtime storage is not ready: {snapshot['message']}",
         )
+
+    def start_runtime_maintenance_loop() -> None:
+        if not cluster_automation.enabled or maintenance_loop_started.is_set():
+            return
+        maintenance_loop_started.set()
+
+        def runner() -> None:
+            while True:
+                time.sleep(CONTROL_PLANE_RECONCILE_SECONDS)
+                if not storage_status_snapshot()["ready"]:
+                    continue
+                try:
+                    reconcile_detached_finalizers()
+                    reconcile_topology_deletions()
+                    kick_sequential_scheduler()
+                except Exception as exc:
+                    print(f"Runtime maintenance loop failed: {exc}", flush=True)
+
+        threading.Thread(
+            target=runner,
+            name="runtime-maintenance-loop",
+            daemon=True,
+        ).start()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> Any:

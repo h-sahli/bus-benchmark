@@ -6,6 +6,7 @@ __pycache__/
 tmp/
 tmp-report.db
 reports/
+runtime/
 runtime/*.db
 runtime/*.yaml
 runtime/*.png

@@ -11,7 +11,7 @@ versions_file="${REPO_ROOT}/deploy/k8s/operators/versions.yaml"
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"
 EXPECTED_STORAGE_MODE="${EXPECTED_STORAGE_MODE:-auto}"
 PORT_FORWARD_PID=""
-HEALTH_BASE_URL="${BASE_URL}"
+HEALTH_BASE_URL="${BASE_URL%/}"
 
 cleanup() {
   if [[ -n "${PORT_FORWARD_PID}" ]]; then

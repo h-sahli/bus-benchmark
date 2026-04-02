@@ -7,6 +7,9 @@ require_cmd kubectl
 require_cmd helm
 python_cmd="$(repo_python_cmd runtime)"
 
+log "Applying Kustomize broker bootstrap overlay"
+kubectl apply -k "${REPO_ROOT}/deploy/kustomize/cluster/brokers"
+
 log "Bootstrapping broker operators from the shared runtime automation path"
 "${python_cmd}" -m services.platform.bootstrap --scope brokers
 log "Broker operators installed and ready."

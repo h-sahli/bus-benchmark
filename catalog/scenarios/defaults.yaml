@@ -503,7 +503,7 @@ presets:
             frameMax: 131072
             connectionTimeoutMs: 15000
           consumer:
-            prefetch: 256
+            prefetch: 400
             prefetchGlobal: false
             autoAck: false
       artemis:
@@ -540,6 +540,10 @@ presets:
           broker:
             maxPayload: 1048576
             maxMemoryStore: 4096
+          producer:
+            maxPendingPublishes: 4096
+          consumer:
+            maxAckPending: 4096
   - id: fanout-distribution
     category: fanout
     categoryLabel: Fanout

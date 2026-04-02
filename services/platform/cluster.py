@@ -430,6 +430,7 @@ def _apply_rabbitmq_broker_tuning(document: dict[str, Any], broker_values: dict[
 
     mapping = {
         "defaultQueueType": "default_queue_type",
+        "maxMessageSizeBytes": "max_message_size",
         "vmMemoryHighWatermark": "vm_memory_high_watermark.relative",
         "diskFreeLimitRelative": "disk_free_limit.relative",
         "consumerTimeoutMs": "consumer_timeout",
@@ -457,6 +458,7 @@ def _apply_artemis_broker_tuning(document: dict[str, Any], broker_values: dict[s
         "journalBufferTimeoutNs": ("journal-buffer-timeout", str),
         "journalBufferSizeBytes": ("journal-buffer-size", str),
         "journalFileSizeBytes": ("journal-file-size", str),
+        "maxSizeBytesRejectThresholdBytes": ("address-setting.#.max-size-bytes-reject-threshold", str),
         "maxDeliveryAttempts": ("address-setting.#.max-delivery-attempts", str),
         "redeliveryDelayMs": ("address-setting.#.redelivery-delay", str),
         "addressFullPolicy": ("address-setting.#.address-full-policy", str),
@@ -1462,8 +1464,19 @@ class ClusterAutomation:
             capture_output=True,
         )
 
-    def _apply_cluster_bootstrap_overlay(self) -> None:
-        overlay_path = self.repo_root / "deploy" / "kustomize" / "cluster" / "portable"
+    def _cluster_bootstrap_overlay_path(self, scope: str = "all") -> Path:
+        normalized_scope = str(scope or "all").strip().lower() or "all"
+        overlay_name = {
+            "brokers": "brokers",
+            "platform-operators": "platform-data",
+            "platform-services": "platform-data",
+            "platform-data": "platform-data",
+            "all": "all",
+        }.get(normalized_scope, "all")
+        return self.repo_root / "deploy" / "kustomize" / "cluster" / overlay_name
+
+    def _apply_cluster_bootstrap_overlay(self, scope: str = "all") -> None:
+        overlay_path = self._cluster_bootstrap_overlay_path(scope)
         self._run(["kubectl", "apply", "-k", str(overlay_path)])
 
     def _helm_operator_values_path(self, file_name: str) -> Path:
@@ -1520,7 +1533,7 @@ class ClusterAutomation:
                 check=False,
             )
             self._wait_for_namespace_absent(namespace)
-        self._apply_cluster_bootstrap_overlay()
+        self._apply_cluster_bootstrap_overlay("all")
 
     def _wait_for_deployments(self, namespace: str, timeout: str = "10m") -> None:
         result = self._run(["kubectl", "-n", namespace, "get", "deploy", "-o", "json"])
@@ -2885,7 +2898,7 @@ class ClusterAutomation:
                     "platformOperators": self._bootstrap_status.get("platformOperators", {}),
                     "platformServices": self._bootstrap_status.get("platformServices", {}),
                 }
-                self._apply_cluster_bootstrap_overlay()
+                self._apply_cluster_bootstrap_overlay(scope)
                 probe = self._probe_bootstrap_state()
 
                 if scope in {"brokers", "all"}:

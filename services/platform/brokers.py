@@ -155,8 +155,6 @@ def _boolean_cli_flag(flag_name: str) -> Callable[[Any], str]:
 
 RABBITMQ_FRAME_MAX_MIN = 4096
 RABBITMQ_FRAME_MAX_MAX = 131072
-
-
 CLIENT_ARG_SPECS: dict[str, dict[str, list[tuple[str, Callable[[Any], str]]]]] = {
     "kafka": {
         "producer": [
@@ -204,8 +202,12 @@ CLIENT_ARG_SPECS: dict[str, dict[str, list[tuple[str, Callable[[Any], str]]]]] =
         "consumer": [],
     },
     "nats": {
-        "producer": [],
-        "consumer": [],
+        "producer": [
+            ("maxPendingPublishes", lambda value: f"--max-pending-publishes={value}"),
+        ],
+        "consumer": [
+            ("maxAckPending", lambda value: f"--max-ack-pending={value}"),
+        ],
     },
 }
 
@@ -217,9 +219,50 @@ def sanitize_broker_tuning(
     tuning = deepcopy(broker_tuning or {})
     broker_key = str(broker_id or "").strip().lower()
     if broker_key != "rabbitmq":
+        if broker_key == "nats":
+            producer_values = tuning.get("producer", {}) or {}
+            consumer_values = tuning.get("consumer", {}) or {}
+            for key in ("maxPendingPublishes",):
+                if producer_values.get(key) not in {None, ""}:
+                    try:
+                        producer_values[key] = max(1, int(producer_values[key]))
+                    except (TypeError, ValueError) as exc:
+                        raise HTTPException(status_code=422, detail="NATS max pending publishes must be an integer") from exc
+            for key in ("maxAckPending",):
+                if consumer_values.get(key) not in {None, ""}:
+                    try:
+                        consumer_values[key] = max(0, int(consumer_values[key]))
+                    except (TypeError, ValueError) as exc:
+                        raise HTTPException(status_code=422, detail="NATS max ack pending must be an integer") from exc
+            if producer_values:
+                tuning["producer"] = producer_values
+            if consumer_values:
+                tuning["consumer"] = consumer_values
+        if broker_key == "artemis":
+            broker_values = tuning.get("broker", {}) or {}
+            for key, detail in (
+                ("maxSizeBytesRejectThresholdBytes", "Artemis reject threshold must be an integer"),
+            ):
+                if broker_values.get(key) not in {None, ""}:
+                    try:
+                        broker_values[key] = max(0, int(broker_values[key]))
+                    except (TypeError, ValueError) as exc:
+                        raise HTTPException(status_code=422, detail=detail) from exc
+            if broker_values:
+                tuning["broker"] = broker_values
         return tuning
 
     producer_values = tuning.get("producer", {}) or {}
+    broker_values = tuning.get("broker", {}) or {}
+    if "maxMessageSizeBytes" in broker_values and broker_values["maxMessageSizeBytes"] not in {None, ""}:
+        try:
+            max_message_bytes = int(broker_values["maxMessageSizeBytes"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail="RabbitMQ max message bytes must be an integer") from exc
+        if max_message_bytes < 1024:
+            raise HTTPException(status_code=422, detail="RabbitMQ max message bytes must be at least 1024")
+        broker_values["maxMessageSizeBytes"] = max_message_bytes
+        tuning["broker"] = broker_values
     if "frameMax" in producer_values and producer_values["frameMax"] not in {None, ""}:
         try:
             frame_max = int(producer_values["frameMax"])
