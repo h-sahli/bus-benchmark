@@ -53,6 +53,9 @@ SCENARIO_CATALOG = REPO_ROOT / "catalog" / "scenarios" / "defaults.yaml"
 BROKER_PROFILE_CATALOG = REPO_ROOT / "catalog" / "broker-profiles.yaml"
 
 RATE_PROFILE_KINDS = {"constant", "ramp-up", "ramp-down", "step-up", "burst"}
+SCHEDULE_MODES = {"parallel", "sequential"}
+QUEUE_STATES = {"queued", "waiting"}
+ACTIVE_EXECUTION_STATUSES = {"scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}
 RESOURCE_SETUP_FALLBACK = {
     "baseline": "defaults",
     "optimized": "latency",
@@ -204,6 +207,8 @@ def normalize_transport_options(
     return {
         "rateProfileKind": profile_kind,
         "peakMessageRate": peak_rate,
+        "payloadLimitHandling": str(options.get("payloadLimitHandling") or "auto").strip().lower() or "auto",
+        "reusePayloadTemplate": bool(options.get("reusePayloadTemplate", False)),
     }
 
 
@@ -276,6 +281,113 @@ def normalize_deployment_mode(value: str | None) -> str:
     if mode not in {"normal", "ha"}:
         raise HTTPException(status_code=422, detail="Unsupported deployment mode")
     return mode
+
+
+def normalize_schedule_mode(value: str | None) -> str:
+    mode = str(value or "parallel").strip().lower() or "parallel"
+    if mode not in SCHEDULE_MODES:
+        raise HTTPException(status_code=422, detail="Unsupported schedule mode")
+    return mode
+
+
+def normalize_message_range(start: int | None, end: int | None) -> tuple[int, int]:
+    range_start = max(1, int(start or 1))
+    range_end = int(end or 0)
+    if range_end < 0:
+        raise HTTPException(status_code=422, detail="Message range end must be zero or greater")
+    if range_end and range_end < range_start:
+        raise HTTPException(status_code=422, detail="Message range end must be greater than or equal to the start")
+    return range_start, range_end
+
+
+def _estimate_base64_size(payload_bytes: int) -> int:
+    size = max(1, int(payload_bytes))
+    return 4 * ((size + 2) // 3)
+
+
+def estimate_structured_cloudevent_wire_size(payload_bytes: int) -> int:
+    payload_bytes = max(1, int(payload_bytes))
+    # Structured JSON CloudEvents add field names, metadata, quoting, and the base64 expansion.
+    return _estimate_base64_size(payload_bytes) + 960
+
+
+def _nested_int(mapping: dict[str, Any] | None, *path: str, default: int = 0) -> int:
+    current: Any = mapping or {}
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    try:
+        return int(current or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def apply_payload_limit_policy(
+    *,
+    broker_id: str,
+    message_size_bytes: int,
+    broker_tuning: dict[str, Any],
+    transport_options: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    tuning = json.loads(json.dumps(broker_tuning or {}))
+    options = dict(transport_options or {})
+    envelope_bytes = estimate_structured_cloudevent_wire_size(message_size_bytes)
+    headroom_limit = int(max(message_size_bytes + 1024, envelope_bytes * 1.10))
+    diagnostics = {
+        "payloadBytes": int(message_size_bytes),
+        "estimatedWireMessageBytes": envelope_bytes,
+        "limitHandling": str(options.get("payloadLimitHandling") or "auto"),
+    }
+    handling = diagnostics["limitHandling"]
+
+    if broker_id == "kafka":
+        producer = tuning.setdefault("producer", {})
+        broker_values = tuning.setdefault("broker", {})
+        producer_limit = _nested_int(tuning, "producer", "maxRequestSizeBytes", default=1_048_576)
+        broker_limit = _nested_int(tuning, "broker", "messageMaxBytes", default=1_048_576)
+        effective_limit = max(1, min(producer_limit, broker_limit))
+        diagnostics["effectivePayloadLimitBytes"] = effective_limit
+        if envelope_bytes > effective_limit:
+            if handling == "strict":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Payload size {message_size_bytes} bytes expands to about {envelope_bytes} bytes on wire, "
+                        f"which exceeds the current Kafka safe limit of {effective_limit} bytes."
+                    ),
+                )
+            producer["maxRequestSizeBytes"] = max(producer_limit, headroom_limit)
+            broker_values["messageMaxBytes"] = max(broker_limit, headroom_limit)
+            broker_values["replicaFetchMaxBytes"] = max(
+                _nested_int(tuning, "broker", "replicaFetchMaxBytes", default=broker_values.get("messageMaxBytes", headroom_limit)),
+                headroom_limit,
+            )
+            diagnostics["effectivePayloadLimitBytes"] = headroom_limit
+            diagnostics["autoAdjusted"] = True
+    elif broker_id == "nats":
+        broker_values = tuning.setdefault("broker", {})
+        current_limit = _nested_int(tuning, "broker", "maxPayload", default=1_048_576)
+        diagnostics["effectivePayloadLimitBytes"] = current_limit
+        if envelope_bytes > current_limit:
+            if handling == "strict":
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Payload size {message_size_bytes} bytes expands to about {envelope_bytes} bytes on wire, "
+                        f"which exceeds the current NATS max payload of {current_limit} bytes."
+                    ),
+                )
+            broker_values["maxPayload"] = max(current_limit, headroom_limit)
+            diagnostics["effectivePayloadLimitBytes"] = broker_values["maxPayload"]
+            diagnostics["autoAdjusted"] = True
+    else:
+        diagnostics["effectivePayloadLimitBytes"] = None
+
+    if diagnostics.get("autoAdjusted"):
+        options["payloadLimitHandling"] = "auto-adjusted"
+    options["estimatedWireMessageBytes"] = envelope_bytes
+    return tuning, options
 
 
 def resource_setup_preset(
@@ -422,11 +534,14 @@ def derive_status(row: sqlite3.Row, now: datetime) -> str:
     completed_at = parse_iso(row["completed_at"])
     topology_deleted_at = parse_iso(row["topology_deleted_at"])
     starts_at = parse_iso(row["starts_at"])
+    queue_state = str(row["queue_state"] or "").strip().lower()
 
     if stopped_at and topology_deleted_at:
         return "stopped"
     if stopped_at and not topology_deleted_at:
         return "cleaning"
+    if queue_state in QUEUE_STATES and topology_ready_at is None and execution_started_at is None:
+        return queue_state
     if starts_at is None:
         return "invalid"
     if topology_ready_at is None:
@@ -473,9 +588,41 @@ def serialize_run(row: sqlite3.Row, now: datetime) -> dict[str, Any]:
     else:
         deployment_mode = "ha" if bool(row["ha_mode"]) else "normal"
     resource_config = parse_metrics(row["resource_config_json"]) if row["resource_config_json"] else {}
+    metrics = parse_metrics(row["metrics_json"])
     target_replicas = int(
         resource_config.get("replicas") or target_replicas_for_mode(deployment_mode)
     )
+    diagnostics: list[dict[str, Any]] = []
+    if metrics.get("source") == "benchmark-agent":
+        summary = metrics.get("summary") or {}
+        latency_summary = summary.get("endToEndLatencyMs") or {}
+        latency_count = float(latency_summary.get("count") or 0.0)
+        if latency_count <= 0.0:
+            diagnostics.append(
+                {
+                    "code": "zero-samples",
+                    "severity": "warning",
+                    "message": "Completed without latency samples. Inspect delivery diagnostics and raw artifacts.",
+                }
+            )
+        success_rate = float(summary.get("deliverySuccessRate") or 0.0)
+        if success_rate < 100.0:
+            diagnostics.append(
+                {
+                    "code": "degraded",
+                    "severity": "warning",
+                    "message": f"Delivery success is {success_rate:.2f}%. The run completed in degraded mode.",
+                }
+            )
+        post_measurement_failure = str((metrics.get("measurement") or {}).get("postMeasurementFailure") or "").strip()
+        if post_measurement_failure:
+            diagnostics.append(
+                {
+                    "code": "late-job-failure",
+                    "severity": "warning",
+                    "message": post_measurement_failure,
+                }
+            )
 
     warmup_seconds = max(0, int(row["warmup_seconds"]))
     measurement_seconds = max(0, int(row["measurement_seconds"]))
@@ -516,6 +663,8 @@ def serialize_run(row: sqlite3.Row, now: datetime) -> dict[str, Any]:
         "scenarioId": row["scenario_id"],
         "configMode": row["config_mode"],
         "deploymentMode": deployment_mode,
+        "scheduleMode": str(row["schedule_mode"] or "parallel"),
+        "queueState": str(row["queue_state"] or "").strip() or None,
         "targetReplicas": target_replicas,
         "startsAt": row["starts_at"],
         "warmupSeconds": row["warmup_seconds"],
@@ -523,12 +672,15 @@ def serialize_run(row: sqlite3.Row, now: datetime) -> dict[str, Any]:
         "cooldownSeconds": row["cooldown_seconds"],
         "messageRate": row["message_rate"],
         "messageSizeBytes": row["message_size_bytes"],
+        "messageRangeStart": int(row["message_range_start"] or 1),
+        "messageRangeEnd": int(row["message_range_end"] or 0),
         "producers": row["producers"],
         "consumers": row["consumers"],
         "transportOptions": parse_transport_options(row["transport_options"]),
         "brokerTuning": parse_metrics(row["broker_tuning_json"]),
-        "metrics": parse_metrics(row["metrics_json"]),
+        "metrics": metrics,
         "resourceConfig": resource_config,
+        "diagnostics": diagnostics,
         "topologyReadyAt": to_iso(topology_ready_at),
         "executionStartedAt": to_iso(execution_started_at),
         "completedAt": to_iso(completed_at),
@@ -560,12 +712,15 @@ class CreateRunRequest(BaseModel):
     scenarioId: str | None = None
     configMode: str = Field(default="baseline")
     deploymentMode: str = Field(default="normal")
+    scheduleMode: str = Field(default="parallel")
     startsAt: datetime | None = None
     warmupSeconds: int = Field(default=10, ge=0, le=3600)
     measurementSeconds: int = Field(default=60, ge=1, le=86400)
     cooldownSeconds: int = Field(default=10, ge=0, le=3600)
     messageRate: int = Field(default=5000, ge=1, le=10000000)
     messageSizeBytes: int = Field(default=1024, ge=1, le=100000000)
+    messageRangeStart: int = Field(default=1, ge=1, le=2000000000)
+    messageRangeEnd: int = Field(default=0, ge=0, le=2000000000)
     producers: int = Field(default=1, ge=1, le=2000)
     consumers: int = Field(default=1, ge=1, le=2000)
     transportOptions: str | dict[str, Any] | None = None
@@ -632,6 +787,7 @@ def create_app(
     profile_service = BrokerProfileService()
     lifecycle_engine = RunLifecycleEngine()
     runtime_init_lock = threading.Lock()
+    scheduler_lock = threading.Lock()
     runtime_state: dict[str, Any] = {
         "ready": False,
         "initializing": False,
@@ -661,6 +817,7 @@ def create_app(
             if cluster_automation.enabled:
                 recover_interrupted_runs()
                 reconcile_run_namespaces()
+                kick_sequential_scheduler()
             with runtime_init_lock:
                 runtime_state["initializing"] = False
                 runtime_state["error"] = None
@@ -754,29 +911,119 @@ def create_app(
                 (run_id,),
             ).fetchall()
 
-    def set_run_field(run_id: str, field_name: str, value: str | None) -> None:
+    def set_run_field(run_id: str, field_name: str, value: Any) -> None:
         with db() as connection:
             connection.execute(
                 f"UPDATE runs SET {field_name} = ? WHERE id = ?",
                 (value, run_id),
             )
 
-    def active_run_exists() -> bool:
+    def active_execution_exists(*, exclude_run_id: str | None = None) -> bool:
         now = utc_now()
         with db() as connection:
             rows = connection.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
-        active_statuses = {"preparing", "scheduled", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}
-        return any(lifecycle_engine.status(row, now) in active_statuses for row in rows)
+        return any(
+            str(row["id"]) != str(exclude_run_id or "")
+            and lifecycle_engine.status(row, now) in ACTIVE_EXECUTION_STATUSES
+            for row in rows
+        )
+
+    def queued_run_rows(connection: Any) -> list[Any]:
+        return connection.execute(
+            """
+            SELECT *
+            FROM runs
+            WHERE stopped_at IS NULL
+              AND completed_at IS NULL
+              AND topology_ready_at IS NULL
+              AND execution_started_at IS NULL
+              AND queue_state IS NOT NULL
+            ORDER BY created_at ASC, starts_at ASC, name ASC
+            """
+        ).fetchall()
+
+    def reconcile_queue_states(connection: Any) -> None:
+        queued_rows = queued_run_rows(connection)
+        has_active_execution = active_execution_exists()
+        for index, row in enumerate(queued_rows):
+            desired_state = "waiting"
+            if not has_active_execution and index == 0:
+                desired_state = "queued"
+            current_state = str(row["queue_state"] or "").strip().lower()
+            if current_state == desired_state:
+                continue
+            connection.execute(
+                "UPDATE runs SET queue_state = ? WHERE id = ?",
+                (desired_state, row["id"]),
+            )
+            if desired_state == "queued":
+                record_event(
+                    connection,
+                    str(row["id"]),
+                    "queued",
+                    "Queued run is now first in line and will launch when the control plane is idle.",
+                )
+            else:
+                record_event(
+                    connection,
+                    str(row["id"]),
+                    "waiting",
+                    "Queued behind another run. Waiting for the previous benchmark to complete.",
+                )
+
+    def kick_sequential_scheduler() -> None:
+        if active_execution_exists():
+            with db() as connection:
+                reconcile_queue_states(connection)
+            return
+
+        def runner() -> None:
+            with scheduler_lock:
+                if active_execution_exists():
+                    with db() as connection:
+                        reconcile_queue_states(connection)
+                    return
+                selected_run_id: str | None = None
+                with db() as connection:
+                    reconcile_queue_states(connection)
+                    selected = connection.execute(
+                        """
+                        SELECT *
+                        FROM runs
+                        WHERE queue_state = 'queued'
+                          AND stopped_at IS NULL
+                          AND completed_at IS NULL
+                          AND topology_ready_at IS NULL
+                          AND execution_started_at IS NULL
+                        ORDER BY created_at ASC, starts_at ASC, name ASC
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                    if selected is None:
+                        return
+                    selected_run_id = str(selected["id"])
+                    connection.execute(
+                        "UPDATE runs SET queue_state = NULL WHERE id = ?",
+                        (selected_run_id,),
+                    )
+                    record_event(
+                        connection,
+                        selected_run_id,
+                        "queue-dispatched",
+                        "Run left the sequential queue and is entering topology preparation.",
+                    )
+                if selected_run_id:
+                    launch_run_preparation(selected_run_id)
+
+        threading.Thread(
+            target=runner,
+            name="sequential-run-scheduler",
+            daemon=True,
+        ).start()
 
     def run_is_measured(run: dict[str, Any]) -> bool:
         metrics = run.get("metrics") or {}
-        summary = metrics.get("summary") or {}
-        latency = summary.get("endToEndLatencyMs") or {}
-        return (
-            run.get("status") == "completed"
-            and metrics.get("source") == "benchmark-agent"
-            and float(latency.get("count") or 0.0) > 0.0
-        )
+        return run.get("status") == "completed" and metrics.get("source") == "benchmark-agent"
 
     def serialize_report(row: sqlite3.Row) -> dict[str, Any]:
         has_download = bool(str(row["file_path"] or "").strip() or str(row["object_key"] or "").strip())
@@ -816,12 +1063,15 @@ def create_app(
             "scenarioId": row["scenario_id"],
             "configMode": row["config_mode"],
             "deploymentMode": row["deployment_mode"],
+            "scheduleMode": row["schedule_mode"],
             "startsAt": row["starts_at"],
             "warmupSeconds": int(row["warmup_seconds"] or 0),
             "measurementSeconds": int(row["measurement_seconds"] or 0),
             "cooldownSeconds": int(row["cooldown_seconds"] or 0),
             "messageRate": int(row["message_rate"] or 0),
             "messageSizeBytes": int(row["message_size_bytes"] or 0),
+            "messageRangeStart": int(row["message_range_start"] or 1),
+            "messageRangeEnd": int(row["message_range_end"] or 0),
             "producers": int(row["producers"] or 0),
             "consumers": int(row["consumers"] or 0),
             "transportOptions": parse_transport_options(row["transport_options"]),
@@ -868,7 +1118,7 @@ def create_app(
         if invalid_run is not None:
             raise HTTPException(
                 status_code=422,
-                detail=f"Run {invalid_run['name']} does not have completed measured results",
+                detail=f"Run {invalid_run['name']} does not have completed benchmark results",
             )
         return serialized_runs
 
@@ -1032,6 +1282,11 @@ def create_app(
                     run_data.get("transportOptions"),
                     message_rate=int(run_data.get("messageRate") or 1),
                 )
+                schedule_mode = normalize_schedule_mode(run_data.get("scheduleMode"))
+                message_range_start, message_range_end = normalize_message_range(
+                    int(run_data.get("messageRangeStart") or 1),
+                    int(run_data.get("messageRangeEnd") or 0),
+                )
                 broker_tuning = sanitize_broker_tuning(
                     broker_id,
                     run_data.get("brokerTuning") if isinstance(run_data.get("brokerTuning"), dict) else {},
@@ -1049,14 +1304,14 @@ def create_app(
                 connection.execute(
                     """
                     INSERT INTO runs (
-                      id, name, broker_id, protocol, scenario_id, config_mode, deployment_mode, starts_at,
+                      id, name, broker_id, protocol, scenario_id, config_mode, deployment_mode, schedule_mode, queue_state, starts_at,
                       warmup_seconds, measurement_seconds, cooldown_seconds, message_rate,
-                      message_size_bytes, producers, consumers,
+                      message_size_bytes, message_range_start, message_range_end, producers, consumers,
                       transport_options, ha_mode, broker_tuning_json,
                       metrics_json, resource_config_json, topology_ready_at, execution_started_at,
                       completed_at, topology_deleted_at, created_at, stopped_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         run_id,
@@ -1066,12 +1321,16 @@ def create_app(
                         normalized_scenario_id,
                         config_mode,
                         deployment_mode,
+                        schedule_mode,
+                        None,
                         starts_at,
                         max(0, int(run_data.get("warmupSeconds") or 0)),
                         max(1, int(run_data.get("measurementSeconds") or 1)),
                         max(0, int(run_data.get("cooldownSeconds") or 0)),
                         max(1, int(run_data.get("messageRate") or 1)),
                         max(1, int(run_data.get("messageSizeBytes") or 1)),
+                        message_range_start,
+                        message_range_end,
                         max(1, int(run_data.get("producers") or 1)),
                         max(1, int(run_data.get("consumers") or 1)),
                         json.dumps(transport_options, sort_keys=True),
@@ -1239,6 +1498,8 @@ def create_app(
                 if deleted
                 else "Topology deletion requested. Namespace is still terminating.",
             )
+            reconcile_queue_states(connection)
+        kick_sequential_scheduler()
 
     def reconcile_topology_deletions() -> None:
         if not hasattr(cluster_automation, "namespace_exists"):
@@ -1389,14 +1650,13 @@ def create_app(
     def reconcile_run_namespaces() -> None:
         if not hasattr(cluster_automation, "delete_orphan_run_namespaces"):
             return
-        active_statuses = {"scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}
         now = utc_now()
         with storage_db() as connection:
             rows = connection.execute("SELECT * FROM runs ORDER BY created_at ASC").fetchall()
         preserved_run_ids = {
             str(row["id"])
             for row in rows
-            if lifecycle_engine.status(row, now) in active_statuses
+            if lifecycle_engine.status(row, now) in ACTIVE_EXECUTION_STATUSES
         }
         cluster_automation.delete_orphan_run_namespaces(preserved_run_ids)
 
@@ -1412,6 +1672,8 @@ def create_app(
         requested_starts_at: datetime,
         message_rate: int,
         message_size_bytes: int,
+        message_range_start: int,
+        message_range_end: int,
         producers: int,
         consumers: int,
         warmup_seconds: int,
@@ -1475,6 +1737,8 @@ def create_app(
                 deployment_mode=deployment_mode,
                 message_rate=message_rate,
                 message_size_bytes=message_size_bytes,
+                message_range_start=message_range_start,
+                message_range_end=message_range_end,
                 producers=producers,
                 consumers=consumers,
                 warmup_seconds=warmup_seconds,
@@ -1529,6 +1793,8 @@ def create_app(
             deployment_mode=deployment_mode,
             message_rate=message_rate,
             message_size_bytes=message_size_bytes,
+            message_range_start=message_range_start,
+            message_range_end=message_range_end,
             producers=producers,
             consumers=consumers,
             warmup_seconds=warmup_seconds,
@@ -1640,7 +1906,103 @@ def create_app(
                     "degraded-completion",
                     f"Measured results were preserved after a late benchmark job failure: {post_measurement_failure}",
                 )
+            reconcile_queue_states(connection)
         cleanup_run_topology(run_id, "completion")
+
+    def launch_run_preparation(run_id: str) -> None:
+        def background_prepare() -> None:
+            row = get_row(run_id)
+            if row is None:
+                return
+            broker_id = str(row["broker_id"] or "kafka").strip().lower() or "kafka"
+            scenario_id = normalize_scenario_id(row["scenario_id"]) if row["scenario_id"] else None
+            config_mode = normalize_config_mode(row["config_mode"])
+            deployment_mode = normalize_deployment_mode(row["deployment_mode"])
+            broker_tuning = parse_metrics(row["broker_tuning_json"])
+            resource_config = parse_metrics(row["resource_config_json"])
+            transport_options = parse_transport_options(row["transport_options"])
+            starts_at = parse_iso(row["starts_at"]) or utc_now()
+            message_range_start = int(row["message_range_start"] or 1)
+            message_range_end = int(row["message_range_end"] or 0)
+            success = cluster_automation.prepare_run_environment(
+                run_id=run_id,
+                broker_id=broker_id,
+                config_mode=config_mode,
+                deployment_mode=deployment_mode,
+                broker_tuning=broker_tuning,
+                producers=int(row["producers"] or 1),
+                consumers=int(row["consumers"] or 1),
+                resource_config=resource_config,
+                emit=lambda event_type, message: record_event_now(run_id, event_type, message),
+            )
+            if not success:
+                stopped_at = utc_now().isoformat()
+                with db() as connection:
+                    connection.execute(
+                        "UPDATE runs SET stopped_at = ? WHERE id = ? AND stopped_at IS NULL",
+                        (stopped_at, run_id),
+                    )
+                    record_event(
+                        connection,
+                        run_id,
+                        "prepare-failed",
+                        "Topology preparation failed.",
+                    )
+                    reconcile_queue_states(connection)
+                cleanup_run_topology(run_id, "prepare failure")
+                return
+
+            topology_ready_at = utc_now().isoformat()
+            with db() as connection:
+                connection.execute(
+                    "UPDATE runs SET topology_ready_at = ?, queue_state = NULL WHERE id = ?",
+                    (topology_ready_at, run_id),
+                )
+            try:
+                start_run_execution(
+                    run_id,
+                    broker_id=broker_id,
+                    scenario_id=scenario_id,
+                    config_mode=config_mode,
+                    deployment_mode=deployment_mode,
+                    broker_tuning=broker_tuning,
+                    resource_config=resource_config,
+                    requested_starts_at=starts_at,
+                    message_rate=int(row["message_rate"] or 1),
+                    message_size_bytes=int(row["message_size_bytes"] or 1),
+                    message_range_start=message_range_start,
+                    message_range_end=message_range_end,
+                    producers=int(row["producers"] or 1),
+                    consumers=int(row["consumers"] or 1),
+                    warmup_seconds=int(row["warmup_seconds"] or 0),
+                    measurement_seconds=int(row["measurement_seconds"] or 1),
+                    cooldown_seconds=int(row["cooldown_seconds"] or 0),
+                    transport_options=transport_options,
+                )
+            except Exception as exc:
+                if run_stop_requested(run_id):
+                    cleanup_run_topology(run_id, "stop")
+                    return
+                failed_at = utc_now().isoformat()
+                with db() as connection:
+                    connection.execute(
+                        "UPDATE runs SET stopped_at = ? WHERE id = ? AND stopped_at IS NULL",
+                        (failed_at, run_id),
+                    )
+                    record_event(
+                        connection,
+                        run_id,
+                        "execution-failed",
+                        str(exc),
+                    )
+                    reconcile_queue_states(connection)
+                cleanup_run_topology(run_id, "execution failure")
+
+        threading.Thread(
+            target=background_prepare,
+            name=f"run-prepare-{run_id[:8]}",
+            daemon=True,
+        ).start()
 
     @app.get("/")
     def index() -> Response:
@@ -1810,20 +2172,6 @@ def create_app(
     @app.post("/api/runs")
     def create_run(payload: CreateRunRequest) -> dict[str, Any]:
         run_name = normalize_run_name(payload.name)
-        if active_run_exists():
-            with db() as connection:
-                existing_run = connection.execute(
-                    "SELECT id FROM runs WHERE lower(name) = lower(?)", (run_name,)
-                ).fetchone()
-                if existing_run:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Run name '{run_name}' already exists. Choose a different name.",
-                    )
-            raise HTTPException(
-                status_code=409,
-                detail="Only one run can be active at a time",
-            )
         if not cluster_automation.enabled:
             raise HTTPException(
                 status_code=503,
@@ -1837,6 +2185,11 @@ def create_app(
         protocol = normalize_protocol_for_broker(broker_id, payload.protocol)
         config_mode = normalize_config_mode(payload.configMode)
         deployment_mode = normalize_deployment_mode(payload.deploymentMode)
+        schedule_mode = normalize_schedule_mode(payload.scheduleMode)
+        message_range_start, message_range_end = normalize_message_range(
+            payload.messageRangeStart,
+            payload.messageRangeEnd,
+        )
         ha_mode = deployment_mode == "ha"
         broker_tuning = payload.brokerTuning or profile_service.default_tuning(
             broker_id=broker_id,
@@ -1861,6 +2214,27 @@ def create_app(
             payload.transportOptions,
             message_rate=payload.messageRate,
         )
+        broker_tuning, transport_options = apply_payload_limit_policy(
+            broker_id=broker_id,
+            message_size_bytes=payload.messageSizeBytes,
+            broker_tuning=broker_tuning,
+            transport_options=transport_options,
+        )
+
+        if schedule_mode == "parallel" and active_execution_exists():
+            with db() as connection:
+                existing_run = connection.execute(
+                    "SELECT id FROM runs WHERE lower(name) = lower(?)", (run_name,)
+                ).fetchone()
+                if existing_run:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Run name '{run_name}' already exists. Choose a different name.",
+                    )
+            raise HTTPException(
+                status_code=409,
+                detail="Only one run can be active at a time in parallel mode. Use sequential mode to queue it.",
+            )
 
         with db() as connection:
             existing_run = connection.execute(
@@ -1872,18 +2246,19 @@ def create_app(
         run_id = str(uuid.uuid4())
         starts_at = (payload.startsAt or utc_now()).astimezone(timezone.utc)
         created_at = utc_now().isoformat()
+        initial_queue_state = "waiting" if schedule_mode == "sequential" else None
 
         with db() as connection:
             connection.execute(
                 """
                 INSERT INTO runs (
-                  id, name, broker_id, protocol, scenario_id, config_mode, deployment_mode, starts_at,
+                  id, name, broker_id, protocol, scenario_id, config_mode, deployment_mode, schedule_mode, queue_state, starts_at,
                   warmup_seconds, measurement_seconds, cooldown_seconds, message_rate,
-                  message_size_bytes, producers, consumers,
+                  message_size_bytes, message_range_start, message_range_end, producers, consumers,
                   transport_options, ha_mode, broker_tuning_json,
                   metrics_json, resource_config_json, created_at, stopped_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     run_id,
@@ -1893,12 +2268,16 @@ def create_app(
                     scenario_id,
                     config_mode,
                     deployment_mode,
+                    schedule_mode,
+                    initial_queue_state,
                     starts_at.isoformat(),
                     payload.warmupSeconds,
                     payload.measurementSeconds,
                     payload.cooldownSeconds,
                     payload.messageRate,
                     payload.messageSizeBytes,
+                    message_range_start,
+                    message_range_end,
                     payload.producers,
                     payload.consumers,
                     json.dumps(transport_options, sort_keys=True),
@@ -1915,90 +2294,31 @@ def create_app(
                 "created",
                 f"{broker['label']} run {run_name} created",
             )
-            record_event(
-                connection,
-                run_id,
-                "topology-started",
-                f"Creating benchmark topology in {run_namespace_for(run_id)} with broker replicas={int(resource_config.get('replicas') or target_replicas_for_mode(deployment_mode))}",
-            )
-            row = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-
-        def background_prepare() -> None:
-            success = cluster_automation.prepare_run_environment(
-                run_id=run_id,
-                broker_id=broker_id,
-                config_mode=config_mode,
-                deployment_mode=deployment_mode,
-                broker_tuning=broker_tuning,
-                producers=payload.producers,
-                consumers=payload.consumers,
-                resource_config=resource_config,
-                emit=lambda event_type, message: record_event_now(run_id, event_type, message),
-            )
-            if not success:
-                stopped_at = utc_now().isoformat()
-                with db() as connection:
-                    connection.execute(
-                        "UPDATE runs SET stopped_at = ? WHERE id = ? AND stopped_at IS NULL",
-                        (stopped_at, run_id),
-                    )
-                    record_event(
-                        connection,
-                        run_id,
-                        "prepare-failed",
-                        "Topology preparation failed.",
-                    )
-                cleanup_run_topology(run_id, "prepare failure")
-                return
-
-            topology_ready_at = utc_now().isoformat()
-            with db() as connection:
-                connection.execute(
-                    "UPDATE runs SET topology_ready_at = ? WHERE id = ?",
-                    (topology_ready_at, run_id),
-                )
-            try:
-                start_run_execution(
+            if schedule_mode == "sequential":
+                reconcile_queue_states(connection)
+                queued_row = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+                queue_state = str(queued_row["queue_state"] or "waiting").strip().lower()
+                record_event(
+                    connection,
                     run_id,
-                    broker_id=broker_id,
-                    scenario_id=scenario_id,
-                    config_mode=config_mode,
-                    deployment_mode=deployment_mode,
-                    broker_tuning=broker_tuning,
-                    resource_config=resource_config,
-                    requested_starts_at=starts_at,
-                    message_rate=payload.messageRate,
-                    message_size_bytes=payload.messageSizeBytes,
-                    producers=payload.producers,
-                    consumers=payload.consumers,
-                    warmup_seconds=payload.warmupSeconds,
-                    measurement_seconds=payload.measurementSeconds,
-                    cooldown_seconds=payload.cooldownSeconds,
-                    transport_options=transport_options,
+                    queue_state,
+                    "Queued behind the current workload."
+                    if queue_state == "waiting"
+                    else "Queued and ready to launch as soon as the platform is idle.",
                 )
-            except Exception as exc:
-                if run_stop_requested(run_id):
-                    cleanup_run_topology(run_id, "stop")
-                    return
-                failed_at = utc_now().isoformat()
-                with db() as connection:
-                    connection.execute(
-                        "UPDATE runs SET stopped_at = ? WHERE id = ? AND stopped_at IS NULL",
-                        (failed_at, run_id),
-                    )
-                    record_event(
-                        connection,
-                        run_id,
-                        "execution-failed",
-                        str(exc),
-                    )
-                cleanup_run_topology(run_id, "execution failure")
-
-        threading.Thread(
-            target=background_prepare,
-            name=f"run-prepare-{run_id[:8]}",
-            daemon=True,
-        ).start()
+            else:
+                record_event(
+                    connection,
+                    run_id,
+                    "topology-started",
+                    f"Creating benchmark topology in {run_namespace_for(run_id)} with broker replicas={int(resource_config.get('replicas') or target_replicas_for_mode(deployment_mode))}",
+                )
+                reconcile_queue_states(connection)
+            row = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if schedule_mode == "sequential":
+            kick_sequential_scheduler()
+        else:
+            launch_run_preparation(run_id)
 
         return lifecycle_engine.serialize(row, utc_now())
 
@@ -2145,8 +2465,15 @@ def create_app(
                 raise HTTPException(status_code=404, detail="Run not found")
             connection.execute("UPDATE runs SET stopped_at = ? WHERE id = ?", (stopped_at, run_id))
             record_event(connection, run_id, "stopped", f"Run {run_id} stopped by user")
+            reconcile_queue_states(connection)
 
         def stop_and_cleanup() -> None:
+            row = get_row(run_id)
+            if row is None:
+                return
+            if not row["topology_ready_at"] and not row["execution_started_at"]:
+                kick_sequential_scheduler()
+                return
             if hasattr(cluster_automation, "delete_run_finalizer_job"):
                 cluster_automation.delete_run_finalizer_job(run_id)
             cleanup_run_topology(run_id, "stop")
@@ -2161,7 +2488,7 @@ def create_app(
 
     @app.delete("/api/runs/reset-all")
     def reset_runs() -> dict[str, Any]:
-        if active_run_exists():
+        if active_execution_exists():
             raise HTTPException(
                 status_code=409,
                 detail="Stop the active run and wait for cleanup before clearing everything",
@@ -2191,7 +2518,7 @@ def create_app(
             if row is None:
                 raise HTTPException(status_code=404, detail="Run not found")
             status = lifecycle_engine.status(row, utc_now())
-            if status in {"scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}:
+            if status in ACTIVE_EXECUTION_STATUSES:
                 raise HTTPException(
                     status_code=409,
                     detail="Stop the run and wait for cleanup before clearing it",

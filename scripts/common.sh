@@ -28,6 +28,73 @@ resolve_python_cmd() {
   exit 1
 }
 
+ensure_repo_python_env() {
+  local profile="${1:-runtime}"
+  local python_cmd
+  local venv_dir
+  local marker_path
+  local requirements_hash
+  local requirement_files=(
+    "${REPO_ROOT}/services/platform/requirements.txt"
+    "${REPO_ROOT}/services/benchmark-agent/requirements.txt"
+  )
+
+  if [[ "${profile}" == "dev" ]]; then
+    requirement_files+=("${REPO_ROOT}/services/platform/requirements-dev.txt")
+  fi
+
+  python_cmd="$(resolve_python_cmd)"
+  venv_dir="${VENV_DIR:-${REPO_ROOT}/.venv}"
+  marker_path="${venv_dir}/.bus-${profile}-requirements.sha256"
+
+  if [[ ! -x "${venv_dir}/bin/python" ]]; then
+    log "Creating Python virtual environment in ${venv_dir}"
+    "${python_cmd}" -m venv "${venv_dir}" || {
+      printf 'Failed to create Python virtual environment in %s\n' "${venv_dir}" >&2
+      exit 1
+    }
+  fi
+
+  requirements_hash="$(
+    {
+      "${venv_dir}/bin/python" --version 2>&1
+      for file in "${requirement_files[@]}"; do
+        printf 'FILE:%s\n' "${file}"
+        cat "${file}"
+      done
+    } | sha256sum | awk '{print $1}'
+  )"
+
+  if [[ -f "${marker_path}" ]] && [[ "$(cat "${marker_path}")" == "${requirements_hash}" ]]; then
+    return 0
+  fi
+
+  log "Installing Python dependencies for ${profile} tooling"
+  "${venv_dir}/bin/python" -m pip install --upgrade pip >/dev/null || {
+    printf 'Failed to upgrade pip in %s\n' "${venv_dir}" >&2
+    exit 1
+  }
+  "${venv_dir}/bin/python" -m pip install -r "${REPO_ROOT}/services/platform/requirements.txt" -r "${REPO_ROOT}/services/benchmark-agent/requirements.txt" >/dev/null || {
+    printf 'Failed to install runtime Python dependencies. Run bash scripts/bootstrap-python-env.sh for details.\n' >&2
+    exit 1
+  }
+  if [[ "${profile}" == "dev" ]]; then
+    "${venv_dir}/bin/python" -m pip install -r "${REPO_ROOT}/services/platform/requirements-dev.txt" >/dev/null || {
+      printf 'Failed to install development Python dependencies. Run bash scripts/bootstrap-python-env.sh --dev for details.\n' >&2
+      exit 1
+    }
+  fi
+
+  printf '%s' "${requirements_hash}" > "${marker_path}"
+}
+
+repo_python_cmd() {
+  local profile="${1:-runtime}"
+  local venv_dir="${VENV_DIR:-${REPO_ROOT}/.venv}"
+  ensure_repo_python_env "${profile}"
+  printf '%s\n' "${venv_dir}/bin/python"
+}
+
 yaml_value() {
   local file_path="$1"
   local section_name="$2"

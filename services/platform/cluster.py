@@ -1218,9 +1218,9 @@ class ClusterAutomation:
             memory_limit=str(os.environ.get("BUS_PLATFORM_MEMORY_LIMIT") or "2Gi").strip(),
         )
         self.producer_job_resources = _resource_spec(
-            cpu_request=str(os.environ.get("BUS_PRODUCER_JOB_CPU_REQUEST") or "250m").strip(),
+            cpu_request=str(os.environ.get("BUS_PRODUCER_JOB_CPU_REQUEST") or "125m").strip(),
             memory_request=str(os.environ.get("BUS_PRODUCER_JOB_MEMORY_REQUEST") or "256Mi").strip(),
-            cpu_limit=str(os.environ.get("BUS_PRODUCER_JOB_CPU_LIMIT") or "1").strip(),
+            cpu_limit=str(os.environ.get("BUS_PRODUCER_JOB_CPU_LIMIT") or "750m").strip(),
             memory_limit=str(os.environ.get("BUS_PRODUCER_JOB_MEMORY_LIMIT") or "1Gi").strip(),
         )
         self.consumer_job_resources = _resource_spec(
@@ -1396,6 +1396,41 @@ class ClusterAutomation:
             ),
         }
         self._last_probe_at = 0.0
+
+    def _scaled_producer_job_resources(
+        self,
+        *,
+        message_rate: int,
+        peak_message_rate: int,
+        producers: int,
+        message_size_bytes: int,
+    ) -> dict[str, Any]:
+        per_producer_peak_rate = max(1, int(math.ceil(max(1, peak_message_rate) / max(1, producers))))
+        request_cpu = "125m"
+        limit_cpu = "750m"
+        request_memory = "256Mi"
+        limit_memory = "1Gi"
+        if per_producer_peak_rate >= 20_000 or message_size_bytes >= 1_048_576:
+            request_cpu = "500m"
+            limit_cpu = "1500m"
+            request_memory = "512Mi"
+            limit_memory = "1536Mi"
+        elif per_producer_peak_rate >= 12_000 or message_size_bytes >= 262_144:
+            request_cpu = "250m"
+            limit_cpu = "1"
+            request_memory = "384Mi"
+            limit_memory = "1280Mi"
+        elif per_producer_peak_rate >= 6_000 or message_size_bytes >= 65_536:
+            request_cpu = "200m"
+            limit_cpu = "750m"
+            request_memory = "256Mi"
+            limit_memory = "1Gi"
+        return _resource_spec(
+            cpu_request=request_cpu,
+            memory_request=request_memory,
+            cpu_limit=limit_cpu,
+            memory_limit=limit_memory,
+        )
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -3834,6 +3869,8 @@ class ClusterAutomation:
         warmup_seconds: int,
         measurement_seconds: int,
         cooldown_seconds: int,
+        message_range_start: int = 1,
+        message_range_end: int = 0,
         transport_options: dict[str, Any] | None,
         resource_config: dict[str, Any] | None = None,
         scheduled_start_ns: int | None = None,
@@ -3874,6 +3911,12 @@ class ClusterAutomation:
             except (TypeError, ValueError):
                 peak_message_rate = _derived_peak_message_rate(message_rate, rate_profile_kind)
         peak_message_rate = max(int(message_rate), peak_message_rate)
+        producer_job_resources = self._scaled_producer_job_resources(
+            message_rate=message_rate,
+            peak_message_rate=peak_message_rate,
+            producers=producers,
+            message_size_bytes=message_size_bytes,
+        )
         image_pull_secrets = (
             [{"name": self.agent_pull_secret}]
             if self.agent_pull_secret and self._secret_exists(agent_namespace, self.agent_pull_secret)
@@ -3990,6 +4033,8 @@ class ClusterAutomation:
                 f"--topology-mode={topology_mode}",
                 "--durability-mode=persistent",
                 f"--message-size-bytes={message_size_bytes}",
+                f"--message-range-start={message_range_start}",
+                f"--message-range-end={message_range_end}",
                 f"--message-rate={per_producer_rate}",
                 f"--peak-message-rate={per_producer_peak_rate}",
                 f"--rate-profile={rate_profile_kind}",
@@ -4003,6 +4048,8 @@ class ClusterAutomation:
             if broker_id == "nats":
                 args.append(f"--jetstream-replicas={nats_jetstream_replicas}")
                 args.append(f"--jetstream-stream-managed-by={nats_stream_managed_by}")
+            if bool((transport_options or {}).get("reusePayloadTemplate", False)):
+                args.append("--reuse-payload-template=true")
             args.extend(selected_connection_args)
             args.extend(producer_tuning_args)
             documents.append(
@@ -4037,7 +4084,7 @@ class ClusterAutomation:
                                         "imagePullPolicy": self.agent_pull_policy,
                                         "args": args,
                                         "env": env,
-                                        "resources": self.producer_job_resources,
+                                        "resources": producer_job_resources,
                                         "volumeMounts": [{"name": "runtime-data", "mountPath": "/data"}],
                                     }
                                 ],
@@ -4064,6 +4111,8 @@ class ClusterAutomation:
         warmup_seconds: int,
         measurement_seconds: int,
         cooldown_seconds: int,
+        message_range_start: int = 1,
+        message_range_end: int = 0,
         transport_options: dict[str, Any] | None,
         broker_tuning: dict[str, Any] | None,
         resource_config: dict[str, Any] | None,
@@ -4083,6 +4132,8 @@ class ClusterAutomation:
             broker_tuning=broker_tuning,
             message_rate=message_rate,
             message_size_bytes=message_size_bytes,
+            message_range_start=message_range_start,
+            message_range_end=message_range_end,
             producers=producers,
             consumers=consumers,
             warmup_seconds=warmup_seconds,
@@ -4133,6 +4184,8 @@ class ClusterAutomation:
         warmup_seconds: int,
         measurement_seconds: int,
         cooldown_seconds: int,
+        message_range_start: int = 1,
+        message_range_end: int = 0,
         transport_options: dict[str, Any] | None,
         broker_tuning: dict[str, Any] | None,
         resource_config: dict[str, Any] | None,
@@ -4152,6 +4205,8 @@ class ClusterAutomation:
             broker_tuning=broker_tuning,
             message_rate=message_rate,
             message_size_bytes=message_size_bytes,
+            message_range_start=message_range_start,
+            message_range_end=message_range_end,
             producers=producers,
             consumers=consumers,
             warmup_seconds=warmup_seconds,

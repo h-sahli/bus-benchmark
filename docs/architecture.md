@@ -41,6 +41,8 @@ It is responsible for:
 - storing run artifacts and reports in S3-compatible storage
 - launching a detached finalizer job to turn stored artifacts into final metrics
 
+Normal application startup is separate from infrastructure bootstrap. Broker operators, platform-data operators, and platform-data services are explicit phases instead of side effects of opening the UI.
+
 ## Storage and finalization
 
 Default runtime mode is local:
@@ -55,6 +57,13 @@ External storage is explicit:
 - S3-compatible object storage via MinIO in `bench-platform-data`
 
 The web pod is no longer the only place where results can be finalized. Benchmark jobs write material to durable storage, and a detached finalizer job completes aggregation independently of the web pod lifecycle.
+
+## Scheduling and producer flow
+
+- `parallel` mode tries to start immediately and fails if another run is already executing
+- `sequential` mode persists the request first, then moves runs through `queued` and `waiting` until the control plane is idle
+- producer jobs scale their own resource envelope from the requested rate, burst peak, producer count, and payload size
+- producer results persist a pipeline profile so payload generation, event encoding, and publish-call costs can be compared directly
 
 ## Exposure model
 

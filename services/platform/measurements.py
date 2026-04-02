@@ -388,6 +388,11 @@ def aggregate_agent_results(
     duplicates = 0
     out_of_order = 0
     bucket_map: dict[int, dict[str, Any]] = {}
+    producer_pipeline_profiles = [
+        profile
+        for profile in (result.get("producerPipeline") for result in producer_results)
+        if isinstance(profile, dict)
+    ]
 
     def ensure_bucket(second: int) -> dict[str, Any]:
         return bucket_map.setdefault(
@@ -749,6 +754,41 @@ def aggregate_agent_results(
         int(message_rate),
         int(options.get("peakMessageRate", derived_peak) or derived_peak),
     )
+    producer_pipeline_summary = None
+    if producer_pipeline_profiles:
+        def _avg(metric_name: str) -> float:
+            values = [
+                float(profile.get(metric_name, 0.0) or 0.0)
+                for profile in producer_pipeline_profiles
+            ]
+            return round(sum(values) / max(1, len(values)), 6)
+
+        hotspot = max(
+            {
+                "payloadGeneration": _avg("payloadGenerationMsPerMessage"),
+                "eventEncode": _avg("eventEncodeMsPerMessage"),
+                "publishCall": _avg("publishCallMsPerMessage"),
+            }.items(),
+            key=lambda item: item[1],
+        )[0]
+        producer_pipeline_summary = {
+            "payloadMode": str(producer_pipeline_profiles[0].get("payloadMode") or "sequence-range"),
+            "messageRangeStart": int(producer_pipeline_profiles[0].get("messageRangeStart", 1) or 1),
+            "messageRangeEnd": int(producer_pipeline_profiles[0].get("messageRangeEnd", 0) or 0),
+            "payloadRegenerated": bool(producer_pipeline_profiles[0].get("payloadRegenerated", True)),
+            "averagePayloadGenerationMsPerMessage": _avg("payloadGenerationMsPerMessage"),
+            "averageEventEncodeMsPerMessage": _avg("eventEncodeMsPerMessage"),
+            "averagePublishCallMsPerMessage": _avg("publishCallMsPerMessage"),
+            "averageWireMessageBytes": round(
+                sum(float(profile.get("averageWireMessageBytes", 0.0) or 0.0) for profile in producer_pipeline_profiles)
+                / max(1, len(producer_pipeline_profiles)),
+                2,
+            ),
+            "maxWireMessageBytes": max(
+                int(profile.get("maxWireMessageBytes", 0) or 0) for profile in producer_pipeline_profiles
+            ),
+            "bottleneckHint": hotspot,
+        }
     return {
         "source": "benchmark-agent",
         "measurement": {
@@ -763,6 +803,7 @@ def aggregate_agent_results(
                 "Measurement windows are selected by producer-stamped phase metadata carried in the CloudEvent.",
                 "On a single-node cluster the producer and consumer usually share the same host clock; multi-node clock skew will widen error bounds.",
             ],
+            "producerPipeline": producer_pipeline_summary,
         },
         "summary": {
             "endToEndLatencyMs": latency_summary,

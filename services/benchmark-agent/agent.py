@@ -420,9 +420,44 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_payload(size: int, seed: int) -> bytes:
-    rng = random.Random(seed)
-    return bytes(rng.getrandbits(8) for _ in range(size))
+class PayloadFactory:
+    def __init__(
+        self,
+        *,
+        size: int,
+        range_start: int = 1,
+        range_end: int = 0,
+        reuse_template: bool = False,
+    ) -> None:
+        self.size = max(1, int(size))
+        self.range_start = max(1, int(range_start or 1))
+        self.range_end = max(0, int(range_end or 0))
+        self.reuse_template = bool(reuse_template)
+        self._template = bytearray(self.size)
+        for index in range(self.size):
+            self._template[index] = (17 + (index * 31)) % 251
+        self._static_payload: bytes | None = None
+        if self.reuse_template:
+            self._static_payload = self._build_payload(self.range_start, 0)
+
+    def message_value_for(self, sequence: int) -> int:
+        if self.range_end and self.range_end >= self.range_start:
+            span = max(1, self.range_end - self.range_start + 1)
+            return self.range_start + (int(sequence) % span)
+        return self.range_start + int(sequence)
+
+    def _build_payload(self, message_value: int, sequence: int) -> bytes:
+        payload = bytearray(self._template)
+        marker = f"BUS{int(message_value):020d}{int(sequence):020d}".encode("ascii")
+        marker = marker[: self.size]
+        payload[: len(marker)] = marker
+        return bytes(payload)
+
+    def render(self, sequence: int) -> tuple[bytes, int]:
+        message_value = self.message_value_for(sequence)
+        if self._static_payload is not None:
+            return self._static_payload, message_value
+        return self._build_payload(message_value, sequence), message_value
 
 
 def classify_phase(
@@ -1768,6 +1803,18 @@ def run_producer(args: argparse.Namespace) -> int:
         chunk_size=240,
         sample_limit=None,
     )
+    payload_factory = PayloadFactory(
+        size=args.message_size_bytes,
+        range_start=args.message_range_start,
+        range_end=args.message_range_end,
+        reuse_template=args.reuse_payload_template,
+    )
+    payload_generation_ns_total = 0
+    event_encode_ns_total = 0
+    publish_call_ns_total = 0
+    throttle_sleep_ns_total = 0
+    wire_bytes_total = 0
+    wire_bytes_max = 0
 
     adapter = with_retryable_startup(
         lambda: build_producer_adapter(args, producer_id),
@@ -1849,7 +1896,9 @@ def run_producer(args: argparse.Namespace) -> int:
             )
             if phase == "complete":
                 break
-            payload = make_payload(args.message_size_bytes, sequence)
+            generation_started_ns = time.perf_counter_ns()
+            payload, _message_value = payload_factory.render(sequence)
+            payload_generation_ns_total += time.perf_counter_ns() - generation_started_ns
             event, producer_send_start_ns = build_cloudevent(
                 run_id=args.run_id,
                 scenario_id=args.scenario_id,
@@ -1865,10 +1914,13 @@ def run_producer(args: argparse.Namespace) -> int:
                 measurement_phase=phase,
                 phase_elapsed_ms=elapsed_ms,
             )
-            raw = json.dumps(event, separators=(",", ":"), sort_keys=False).encode("utf-8")
             invoke_ns = time.time_ns()
             event["producerinvokepublishns"] = invoke_ns
+            encode_started_ns = time.perf_counter_ns()
             raw = json.dumps(event, separators=(",", ":"), sort_keys=False).encode("utf-8")
+            event_encode_ns_total += time.perf_counter_ns() - encode_started_ns
+            wire_bytes_total += len(raw)
+            wire_bytes_max = max(wire_bytes_max, len(raw))
             attempted += 1
             if phase == "measure":
                 measured_attempted += 1
@@ -1888,6 +1940,7 @@ def run_producer(args: argparse.Namespace) -> int:
                 }
                 if uses_delivery_queue:
                     pending_delivery_contexts[event_id] = publish_context
+                publish_started_ns = time.perf_counter_ns()
                 publish_metadata = publish_message(
                     adapter=adapter,
                     broker_id=args.broker,
@@ -1897,6 +1950,7 @@ def run_producer(args: argparse.Namespace) -> int:
                     mandatory=args.mandatory,
                     context=publish_context,
                 )
+                publish_call_ns_total += time.perf_counter_ns() - publish_started_ns
                 if not uses_delivery_queue:
                     ack_ns = time.time_ns()
                     ack_latency_ms = (ack_ns - producer_send_start_ns) / 1_000_000.0
@@ -1950,7 +2004,9 @@ def run_producer(args: argparse.Namespace) -> int:
             next_emit += 1.0 / current_rate
             sleep_for = next_emit - time.perf_counter()
             if sleep_for > 0:
+                sleep_started_ns = time.perf_counter_ns()
                 time.sleep(sleep_for)
+                throttle_sleep_ns_total += time.perf_counter_ns() - sleep_started_ns
 
         if uses_delivery_queue:
             adapter.flush()
@@ -2004,6 +2060,22 @@ def run_producer(args: argparse.Namespace) -> int:
                     "primaryMetric": "producer_ack",
                     "phaseSelection": "measure",
                     "cloudEventsMode": "structured-json-v1.0",
+                },
+                "producerPipeline": {
+                    "payloadMode": "static-template" if args.reuse_payload_template else "sequence-range",
+                    "messageRangeStart": int(args.message_range_start or 1),
+                    "messageRangeEnd": int(args.message_range_end or 0),
+                    "generatedMessages": int(attempted),
+                    "payloadRegenerated": not bool(args.reuse_payload_template),
+                    "payloadGenerationMsTotal": round(payload_generation_ns_total / 1_000_000.0, 6),
+                    "payloadGenerationMsPerMessage": round((payload_generation_ns_total / max(1, attempted)) / 1_000_000.0, 6),
+                    "eventEncodeMsTotal": round(event_encode_ns_total / 1_000_000.0, 6),
+                    "eventEncodeMsPerMessage": round((event_encode_ns_total / max(1, attempted)) / 1_000_000.0, 6),
+                    "publishCallMsTotal": round(publish_call_ns_total / 1_000_000.0, 6),
+                    "publishCallMsPerMessage": round((publish_call_ns_total / max(1, attempted)) / 1_000_000.0, 6),
+                    "throttleSleepMsTotal": round(throttle_sleep_ns_total / 1_000_000.0, 6),
+                    "averageWireMessageBytes": round(wire_bytes_total / max(1, attempted), 2),
+                    "maxWireMessageBytes": int(wire_bytes_max),
                 },
                 "rawRecordCount": raw_record_count,
                 "timeseriesRecordCount": timeseries_record_count,
@@ -2166,6 +2238,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--consumer-id", default=os.environ.get("CONSUMER_ID", "consumer-1"))
     parser.add_argument("--consumer-group", default=os.environ.get("CONSUMER_GROUP", "bench-consumers"))
     parser.add_argument("--message-size-bytes", type=int, default=int(os.environ.get("MESSAGE_SIZE_BYTES", "1024")))
+    parser.add_argument("--message-range-start", type=int, default=int(os.environ.get("MESSAGE_RANGE_START", "1")))
+    parser.add_argument("--message-range-end", type=int, default=int(os.environ.get("MESSAGE_RANGE_END", "0")))
     parser.add_argument("--message-rate", type=int, default=int(os.environ.get("MESSAGE_RATE", "5000")))
     parser.add_argument("--peak-message-rate", type=int, default=int(os.environ.get("PEAK_MESSAGE_RATE", "5000")))
     parser.add_argument("--rate-profile", choices=["constant", "ramp-up", "ramp-down", "step-up", "burst"], default=os.environ.get("RATE_PROFILE", "constant"))
@@ -2236,6 +2310,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--mandatory",
         type=lambda item: str(item).lower() in {"1", "true", "yes", "y"},
         default=str(os.environ.get("MANDATORY", "false")).lower() in {"1", "true", "yes", "y"},
+    )
+    parser.add_argument(
+        "--reuse-payload-template",
+        type=lambda item: str(item).lower() in {"1", "true", "yes", "y"},
+        default=str(os.environ.get("REUSE_PAYLOAD_TEMPLATE", "false")).lower() in {"1", "true", "yes", "y"},
     )
     parser.add_argument("--heartbeat-sec", type=int, default=int(os.environ.get("HEARTBEAT_SEC", "30")))
     parser.add_argument("--frame-max", type=int, default=int(os.environ.get("FRAME_MAX", "131072")))

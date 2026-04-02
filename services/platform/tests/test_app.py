@@ -417,6 +417,45 @@ class FailingLaunchClusterAutomation(FakeClusterAutomation):
         return None
 
 
+class SlowClusterAutomation(FakeClusterAutomation):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+
+    def run_benchmark_agents(self, *, emit, message_rate, scheduled_start_ns=None, **kwargs: dict) -> dict:
+        del kwargs
+        emit("consumer-running", "Consumer jobs created.")
+        emit("producer-running", "Producer jobs created.")
+        self.release.wait(timeout=5.0)
+        return super().run_benchmark_agents(
+            emit=emit,
+            message_rate=message_rate,
+            scheduled_start_ns=scheduled_start_ns,
+        )
+
+
+class ZeroSampleClusterAutomation(FakeClusterAutomation):
+    def run_benchmark_agents(self, *, emit, message_rate, scheduled_start_ns=None, **kwargs: dict) -> dict:
+        payload = super().run_benchmark_agents(
+            emit=emit,
+            message_rate=message_rate,
+            scheduled_start_ns=scheduled_start_ns,
+            **kwargs,
+        )
+        producer = json.loads(payload["producerLogs"][0])
+        consumer = json.loads(payload["consumerLogs"][0])
+        consumer["result"]["received"] = 0
+        consumer["result"]["receivedMeasured"] = 0
+        consumer["result"]["latencyHistogramMs"] = []
+        consumer["result"]["timeseries"] = [
+            {"second": 0, "deliveredMessages": 0, "latencyHistogramMs": []},
+            {"second": 1, "deliveredMessages": 0, "latencyHistogramMs": []},
+        ]
+        payload["producerLogs"][0] = json.dumps(producer)
+        payload["consumerLogs"][0] = json.dumps(consumer)
+        return payload
+
+
 @pytest.fixture()
 def client(tmp_path: Path) -> TestClient:
     with TestClient(
@@ -438,6 +477,24 @@ def wait_for_run_status(
         assert response.status_code == 200
         latest = response.json()["run"]
         if latest["status"] == expected_status:
+            return latest
+        time.sleep(0.2)
+    return latest
+
+
+def wait_for_run_status_in(
+    client: TestClient,
+    run_id: str,
+    expected_statuses: set[str],
+    timeout_seconds: float = 8.0,
+) -> dict:
+    deadline = time.time() + timeout_seconds
+    latest = {}
+    while time.time() < deadline:
+        response = client.get(f"/api/runs/{run_id}")
+        assert response.status_code == 200
+        latest = response.json()["run"]
+        if latest["status"] in expected_statuses:
             return latest
         time.sleep(0.2)
     return latest
@@ -598,11 +655,115 @@ def test_transport_pattern_is_stored_and_affects_metrics(client: TestClient) -> 
     )
     assert response.status_code == 200
     run = response.json()
-    assert run["transportOptions"] == {"rateProfileKind": "burst", "peakMessageRate": 10000}
+    assert run["transportOptions"]["rateProfileKind"] == "burst"
+    assert run["transportOptions"]["peakMessageRate"] == 10000
+    assert run["transportOptions"]["payloadLimitHandling"] == "auto"
+    assert run["transportOptions"]["reusePayloadTemplate"] is False
+    assert run["transportOptions"]["estimatedWireMessageBytes"] >= 2000
 
     completed = wait_for_run_status(client, run["id"], "completed")
     assert completed["metrics"]["summary"]["loadProfile"]["rateProfileKind"] == "burst"
     assert completed["metrics"]["summary"]["loadProfile"]["peakMessageRate"] == 10000
+
+
+def test_payload_limit_policy_auto_adjusts_large_kafka_messages(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "payload-auto.db", cluster_automation=FakeClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "large kafka payload",
+                "brokerId": "kafka",
+                "messageSizeBytes": 900000,
+                "transportOptions": {"payloadLimitHandling": "auto"},
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 200
+        run = response.json()
+        assert run["transportOptions"]["payloadLimitHandling"] == "auto-adjusted"
+        assert run["transportOptions"]["estimatedWireMessageBytes"] > 1_048_576
+        assert run["brokerTuning"]["producer"]["maxRequestSizeBytes"] > 1_048_576
+        assert run["brokerTuning"]["broker"]["messageMaxBytes"] > 1_048_576
+
+
+def test_payload_limit_policy_strict_rejects_large_kafka_messages(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "payload-strict.db", cluster_automation=FakeClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "strict kafka payload",
+                "brokerId": "kafka",
+                "messageSizeBytes": 900000,
+                "transportOptions": {"payloadLimitHandling": "strict"},
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 422
+        assert "expands to about" in response.json()["detail"]
+
+
+def test_sequential_run_waits_behind_active_execution(tmp_path: Path) -> None:
+    automation = SlowClusterAutomation()
+    with TestClient(create_app(tmp_path / "sequential.db", cluster_automation=automation)) as client:
+        first = client.post(
+            "/api/runs",
+            json={
+                "name": "parallel active",
+                "brokerId": "kafka",
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert first.status_code == 200
+        active = wait_for_run_status_in(client, first.json()["id"], {"scheduled", "warmup", "measuring"})
+        assert active["status"] in {"scheduled", "warmup", "measuring"}
+
+        queued = client.post(
+            "/api/runs",
+            json={
+                "name": "queued after active",
+                "brokerId": "kafka",
+                "scheduleMode": "sequential",
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert queued.status_code == 200
+        queued_run = queued.json()
+        assert queued_run["status"] == "waiting"
+        assert queued_run["queueState"] == "waiting"
+        event_types = {event["event_type"] for event in client.get(f"/api/runs/{queued_run['id']}").json()["events"]}
+        assert "waiting" in event_types
+
+        automation.release.set()
+        completed = wait_for_run_status(client, first.json()["id"], "completed")
+        assert completed["status"] == "completed"
+        started = wait_for_run_status(client, queued_run["id"], "completed")
+        assert started["scheduleMode"] == "sequential"
+
+
+def test_completed_zero_sample_run_includes_diagnostics(tmp_path: Path) -> None:
+    with TestClient(create_app(tmp_path / "zero-sample.db", cluster_automation=ZeroSampleClusterAutomation())) as client:
+        response = client.post(
+            "/api/runs",
+            json={
+                "name": "zero sample run",
+                "brokerId": "kafka",
+                "warmupSeconds": 0,
+                "measurementSeconds": 1,
+                "cooldownSeconds": 0,
+            },
+        )
+        assert response.status_code == 200
+        run = wait_for_run_status(client, response.json()["id"], "completed")
+        diagnostic_codes = {item["code"] for item in run["diagnostics"]}
+        assert "zero-samples" in diagnostic_codes
 
 
 def test_only_one_active_run_allowed(client: TestClient) -> None:

@@ -15,6 +15,7 @@ from typing import Any
 
 
 ACTIVE_STATUSES = {"preparing", "scheduled", "warmup", "measuring", "cooldown", "finalizing", "cleaning"}
+TERMINAL_STATUSES = {"completed", "stopped"}
 CREATE_RUN_KEYS = (
     "name",
     "brokerId",
@@ -22,12 +23,15 @@ CREATE_RUN_KEYS = (
     "scenarioId",
     "configMode",
     "deploymentMode",
+    "scheduleMode",
     "startsAt",
     "warmupSeconds",
     "measurementSeconds",
     "cooldownSeconds",
     "messageRate",
     "messageSizeBytes",
+    "messageRangeStart",
+    "messageRangeEnd",
     "producers",
     "consumers",
     "transportOptions",
@@ -54,6 +58,25 @@ def write_state(path: Path | None, payload: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def read_state(path: Path | None) -> dict[str, Any]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def archive_state_file(path: Path | None, reason: str) -> None:
+    if path is None or not path.exists():
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    archived = path.with_name(f"{path.stem}.{reason}.{stamp}{path.suffix}")
+    path.replace(archived)
+    utc_log(f"Archived previous sequence state to {archived}")
 
 
 class ApiClient:
@@ -199,7 +222,7 @@ def wait_for_terminal(client: ApiClient, run_id: str, poll_seconds: int, state_p
                 "updatedAt": datetime.now(timezone.utc).isoformat(),
             },
         )
-        if status in {"completed", "stopped"}:
+        if status in TERMINAL_STATUSES:
             for event in terminal_events(details):
                 utc_log(f"event {event['createdAt']} {event['type']}: {event['message']}")
             return run
@@ -233,6 +256,76 @@ def build_payload(client: ApiClient, item: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def resume_sequence_index(
+    client: ApiClient,
+    *,
+    state_path: Path | None,
+    poll_seconds: int,
+    continue_on_error: bool,
+    total_runs: int,
+) -> int:
+    state = read_state(state_path)
+    if not state:
+        return 1
+
+    phase = str(state.get("phase") or "").strip().lower()
+    try:
+        index = int(state.get("index") or 0)
+    except (TypeError, ValueError):
+        index = 0
+    run_id = str(state.get("runId") or "").strip()
+    run_name = str(state.get("runName") or run_id).strip() or "unknown-run"
+
+    if phase == "finished":
+        archive_state_file(state_path, "finished")
+        return 1
+
+    if index < 1 or index > total_runs:
+        archive_state_file(state_path, "stale")
+        return 1
+
+    if phase in {"run-finished", "create-failed"}:
+        utc_log(f"Resuming sequence after prior state for item {index}/{total_runs}")
+        if phase == "run-finished" and str(state.get("status") or "").strip().lower() == "stopped" and not continue_on_error:
+            raise RuntimeError(f"Run {run_name} stopped before completion")
+        return index + 1
+
+    if run_id:
+        utc_log(f"Resuming monitoring for {run_name} ({run_id}) from saved sequence state")
+        try:
+            details = client.get_run_details(run_id)
+        except Exception as exc:
+            utc_log(f"Saved run {run_id} could not be inspected: {exc}. Replaying item {index}.")
+            return index
+        run = dict(details.get("run") or {})
+        status = str(run.get("status") or "").strip().lower()
+        if status in TERMINAL_STATUSES:
+            utc_log(f"Saved run {run_name} already ended with status={status}")
+            if status == "stopped" and not continue_on_error:
+                raise RuntimeError(f"Run {run_name} stopped before completion")
+            return index + 1
+        final_run = wait_for_terminal(client, run_id, poll_seconds, state_path)
+        final_status = str(final_run.get("status") or "").strip().lower()
+        write_state(
+            state_path,
+            {
+                "phase": "run-finished",
+                "index": index,
+                "totalRuns": total_runs,
+                "runId": run_id,
+                "runName": run_name,
+                "status": final_status,
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if final_status == "stopped" and not continue_on_error:
+            raise RuntimeError(f"Run {run_name} stopped before completion")
+        return index + 1
+
+    utc_log(f"Resuming sequence from item {index}/{total_runs}")
+    return index
+
+
 def run_sequence(client: ApiClient, spec: dict[str, Any], state_path: Path | None = None) -> None:
     runs = spec.get("runs")
     if not isinstance(runs, list) or not runs:
@@ -249,7 +342,14 @@ def run_sequence(client: ApiClient, spec: dict[str, Any], state_path: Path | Non
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         },
     )
-    for index, item in enumerate(runs, start=1):
+    start_index = resume_sequence_index(
+        client,
+        state_path=state_path,
+        poll_seconds=poll_seconds,
+        continue_on_error=continue_on_error,
+        total_runs=len(runs),
+    )
+    for index, item in enumerate(runs[start_index - 1 :], start=start_index):
         if not isinstance(item, dict):
             raise RuntimeError("Each sequence item must be an object")
         wait_until_idle(client, poll_seconds, state_path)

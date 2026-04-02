@@ -32,12 +32,16 @@ RUNS_TABLE_COLUMNS = [
     "scenario_id",
     "config_mode",
     "deployment_mode",
+    "schedule_mode",
+    "queue_state",
     "starts_at",
     "warmup_seconds",
     "measurement_seconds",
     "cooldown_seconds",
     "message_rate",
     "message_size_bytes",
+    "message_range_start",
+    "message_range_end",
     "producers",
     "consumers",
     "transport_options",
@@ -191,12 +195,16 @@ class SQLiteDatabaseBackend:
                   scenario_id TEXT,
                   config_mode TEXT NOT NULL DEFAULT 'baseline',
                   deployment_mode TEXT NOT NULL DEFAULT 'normal',
+                  schedule_mode TEXT NOT NULL DEFAULT 'parallel',
+                  queue_state TEXT,
                   starts_at TEXT NOT NULL,
                   warmup_seconds INTEGER NOT NULL,
                   measurement_seconds INTEGER NOT NULL,
                   cooldown_seconds INTEGER NOT NULL,
                   message_rate INTEGER NOT NULL DEFAULT 5000,
                   message_size_bytes INTEGER NOT NULL DEFAULT 1024,
+                  message_range_start INTEGER NOT NULL DEFAULT 1,
+                  message_range_end INTEGER NOT NULL DEFAULT 0,
                   producers INTEGER NOT NULL DEFAULT 1,
                   consumers INTEGER NOT NULL DEFAULT 1,
                   transport_options TEXT,
@@ -217,8 +225,12 @@ class SQLiteDatabaseBackend:
             self._ensure_sqlite_column(connection, "runs", "protocol", "TEXT NOT NULL DEFAULT 'kafka'")
             self._ensure_sqlite_column(connection, "runs", "config_mode", "TEXT NOT NULL DEFAULT 'baseline'")
             self._ensure_sqlite_column(connection, "runs", "deployment_mode", "TEXT NOT NULL DEFAULT 'normal'")
+            self._ensure_sqlite_column(connection, "runs", "schedule_mode", "TEXT NOT NULL DEFAULT 'parallel'")
+            self._ensure_sqlite_column(connection, "runs", "queue_state", "TEXT")
             self._ensure_sqlite_column(connection, "runs", "message_rate", "INTEGER NOT NULL DEFAULT 5000")
             self._ensure_sqlite_column(connection, "runs", "message_size_bytes", "INTEGER NOT NULL DEFAULT 1024")
+            self._ensure_sqlite_column(connection, "runs", "message_range_start", "INTEGER NOT NULL DEFAULT 1")
+            self._ensure_sqlite_column(connection, "runs", "message_range_end", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_sqlite_column(connection, "runs", "producers", "INTEGER NOT NULL DEFAULT 1")
             self._ensure_sqlite_column(connection, "runs", "consumers", "INTEGER NOT NULL DEFAULT 1")
             self._ensure_sqlite_column(connection, "runs", "transport_options", "TEXT")
@@ -325,12 +337,16 @@ class PostgresDatabaseBackend:
                   scenario_id TEXT,
                   config_mode TEXT NOT NULL DEFAULT 'baseline',
                   deployment_mode TEXT NOT NULL DEFAULT 'normal',
+                  schedule_mode TEXT NOT NULL DEFAULT 'parallel',
+                  queue_state TEXT,
                   starts_at TEXT NOT NULL,
                   warmup_seconds INTEGER NOT NULL,
                   measurement_seconds INTEGER NOT NULL,
                   cooldown_seconds INTEGER NOT NULL,
                   message_rate INTEGER NOT NULL DEFAULT 5000,
                   message_size_bytes INTEGER NOT NULL DEFAULT 1024,
+                  message_range_start INTEGER NOT NULL DEFAULT 1,
+                  message_range_end INTEGER NOT NULL DEFAULT 0,
                   producers INTEGER NOT NULL DEFAULT 1,
                   consumers INTEGER NOT NULL DEFAULT 1,
                   transport_options TEXT,
@@ -352,8 +368,12 @@ class PostgresDatabaseBackend:
                 ("protocol", "TEXT NOT NULL DEFAULT 'kafka'"),
                 ("config_mode", "TEXT NOT NULL DEFAULT 'baseline'"),
                 ("deployment_mode", "TEXT NOT NULL DEFAULT 'normal'"),
+                ("schedule_mode", "TEXT NOT NULL DEFAULT 'parallel'"),
+                ("queue_state", "TEXT"),
                 ("message_rate", "INTEGER NOT NULL DEFAULT 5000"),
                 ("message_size_bytes", "INTEGER NOT NULL DEFAULT 1024"),
+                ("message_range_start", "INTEGER NOT NULL DEFAULT 1"),
+                ("message_range_end", "INTEGER NOT NULL DEFAULT 0"),
                 ("producers", "INTEGER NOT NULL DEFAULT 1"),
                 ("consumers", "INTEGER NOT NULL DEFAULT 1"),
                 ("transport_options", "TEXT"),

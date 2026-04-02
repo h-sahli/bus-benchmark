@@ -341,11 +341,11 @@ def test_capacity_shortfall_detail_reports_cluster_limit(monkeypatch) -> None:
 
     assert detail is not None
     assert "Cluster capacity check failed" in detail
-    assert "CPU request 3.85 exceeds schedulable allocatable 2" in detail
+    assert "CPU request 3.73 exceeds schedulable allocatable 2" in detail
     assert "memory request 7Gi exceeds schedulable allocatable 4Gi" in detail
     assert "Broker pool from the UI/request is 2.5 CPU and 4Gi memory" in detail
     assert "fixed controller pool adds 250m CPU and 512Mi memory" in detail
-    assert "benchmark workers add 350m CPU and 512Mi memory" in detail
+    assert "benchmark workers add 225m CPU and 512Mi memory" in detail
     assert "platform runtime reserves 750m CPU and 2Gi memory" in detail
 
 
@@ -434,7 +434,7 @@ def test_build_agent_jobs_apply_worker_resources_and_deadline() -> None:
     )
     assert (
         producer_job["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]["memory"]
-        == "256Mi"
+        == "384Mi"
     )
 
 

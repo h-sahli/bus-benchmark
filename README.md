@@ -5,6 +5,7 @@ Kubernetes-native benchmark platform for Apache Kafka, RabbitMQ, ActiveMQ Artemi
 ## Start
 
 ```bash
+bash scripts/bootstrap-python-env.sh
 bash scripts/start-platform.sh
 ```
 
@@ -16,6 +17,8 @@ The start script:
 - installs platform-data operators and services only when external storage is requested
 - rebuilds and redeploys the runtime
 - prints the full access address when the deploy completes
+
+`bootstrap-python-env.sh` creates the shared repo virtual environment and installs the runtime dependencies needed by the operational scripts. Add `--dev` when you also want test and Playwright dependencies.
 
 For an in-place rollout without deleting stored runs first:
 
@@ -75,13 +78,24 @@ The portability contract is now:
 
 1. Open the UI.
 2. In `Benchmark`, choose the broker, setup, and test window.
-3. Start one run.
+3. Start one run immediately or queue it in sequential mode.
 4. The platform creates a dedicated run namespace, deploys the selected broker runtime, starts producer and consumer jobs, and stores measured results.
 5. A detached finalizer job aggregates stored artifacts after the run window completes.
 6. In `Results`, review completed runs.
 7. In `Reports`, review the report preview and export a PDF from completed runs.
 
-Only one run is active at a time. When a run finishes or is stopped, the run namespace is deleted. Operators stay installed.
+Only one run executes at a time. Parallel mode requires an open slot. Sequential mode keeps later runs in `queued` and `waiting` states until the active benchmark completes. When a run finishes or is stopped, the run namespace is deleted. Operators stay installed.
+
+## Benchmark controls
+
+The Benchmark tab now supports:
+
+- sequential scheduling
+- message marker ranges with optional wraparound
+- broker-safe payload limit policy
+- fresh payload generation or deliberate payload template reuse
+
+Large payloads are validated against broker-safe limits after CloudEvents overhead is considered. In `auto adjust` mode the platform expands broker-safe limits when it can. In `strict reject` mode it fails fast instead.
 
 ## Scenario catalog
 
@@ -146,6 +160,8 @@ Reports are generated only from stored measured runs. They include:
 - artifact counts and timing notes
 
 The web `Reports` tab stays table-based. Charts are generated in the PDF itself from stored measured data.
+
+Completed runs with degraded delivery or zero latency samples still appear in `Results` and `Reports`. They are marked with diagnostics instead of being hidden.
 
 ## Verify
 

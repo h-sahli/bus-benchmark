@@ -94,7 +94,7 @@ fi
 require_cmd kubectl
 require_cmd docker
 require_cmd curl
-resolve_python_cmd >/dev/null
+repo_python_cmd runtime >/dev/null
 
 detect_ingress_class() {
   local class_name

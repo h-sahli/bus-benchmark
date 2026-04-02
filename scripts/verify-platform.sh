@@ -5,7 +5,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 require_cmd kubectl
 require_cmd curl
-python_cmd="$(resolve_python_cmd)"
+python_cmd="$(repo_python_cmd runtime)"
 versions_file="${REPO_ROOT}/deploy/k8s/operators/versions.yaml"
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:18080}"

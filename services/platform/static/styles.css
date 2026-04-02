@@ -1075,6 +1075,11 @@ textarea:focus {
   color: var(--warning);
 }
 
+.status-queued,
+.status-waiting {
+  color: #f4d27a;
+}
+
 .status-preparing,
 .status-warmup,
 .status-measuring,
@@ -1207,6 +1212,26 @@ textarea:focus {
   font-size: 0.85rem;
   font-weight: 500;
   text-align: left;
+}
+
+.viz-run-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.viz-run-label strong {
+  font-size: 0.85rem;
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.viz-run-caption {
+  color: #97b2c9;
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .viz-run-option:hover {

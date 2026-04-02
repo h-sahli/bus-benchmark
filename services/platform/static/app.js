@@ -167,9 +167,14 @@ const elements = {
   rateProfileSelect: required("rateProfileSelect"),
   loadShapeSummaryHint: required("loadShapeSummaryHint"),
   startsAtInput: required("startsAtInput"),
+  scheduleModeSelect: required("scheduleModeSelect"),
   runNameInput: required("runNameInput"),
   messageRateInput: required("messageRateInput"),
   messageSizeBytesInput: required("messageSizeBytesInput"),
+  messageRangeStartInput: required("messageRangeStartInput"),
+  messageRangeEndInput: required("messageRangeEndInput"),
+  payloadLimitHandlingSelect: required("payloadLimitHandlingSelect"),
+  payloadGenerationModeSelect: required("payloadGenerationModeSelect"),
   producersInput: required("producersInput"),
   consumersInput: required("consumersInput"),
   warmupSecondsInput: required("warmupSecondsInput"),
@@ -1263,6 +1268,7 @@ function updateWindowSummary() {
   const total = warmup + measure + cooldown;
   const startValue = elements.startsAtInput.value;
   const totalLabel = `${formatDuration(total)} total`;
+  const scheduleLabel = elements.scheduleModeSelect.value === "sequential" ? "Queued sequentially" : "Parallel start";
 
   if (!startValue) {
     elements.windowSummaryValue.textContent = totalLabel;
@@ -1270,7 +1276,7 @@ function updateWindowSummary() {
       `Warmup ${formatDuration(warmup)}`,
       `Measure ${formatDuration(measure)}`,
       `Cooldown ${formatDuration(cooldown)}`,
-      "Start now",
+      scheduleLabel,
     ]);
     return;
   }
@@ -1282,6 +1288,7 @@ function updateWindowSummary() {
     `Warmup ${formatDuration(warmup)}`,
     `Measure ${formatDuration(measure)}`,
     `Cooldown ${formatDuration(cooldown)}`,
+    scheduleLabel,
     `${start.toLocaleString()} to ${end.toLocaleTimeString()}`,
   ]);
 }
@@ -1290,13 +1297,32 @@ function updateLoadShapeSummary() {
   const baseRate = Math.max(1, Number(elements.messageRateInput.value || 1));
   const profile = loadProfileValue();
   const peakRate = peakMessageRateValue(baseRate, profile);
-  elements.loadShapeSummaryHint.textContent = loadProfileLabel(profile, baseRate, peakRate);
+  const rangeStart = Math.max(1, Number(elements.messageRangeStartInput.value || 1));
+  const rangeEnd = Math.max(0, Number(elements.messageRangeEndInput.value || 0));
+  const payloadBytes = Math.max(1, Number(elements.messageSizeBytesInput.value || 1));
+  const estimatedWireBytes = (4 * Math.ceil(payloadBytes / 3)) + 960;
+  const limitHandling = elements.payloadLimitHandlingSelect.value === "strict" ? "Strict limit check" : "Auto-adjust broker limits";
+  const payloadGeneration = elements.payloadGenerationModeSelect.value === "reuse-template" ? "Reuse one payload template" : "Generate fresh payloads";
+  elements.loadShapeSummaryHint.textContent = compactList([
+    loadProfileLabel(profile, baseRate, peakRate),
+    rangeEnd > 0 ? `Payload markers ${rangeStart.toLocaleString()} to ${rangeEnd.toLocaleString()}` : `Payload markers start at ${rangeStart.toLocaleString()} with no wrap`,
+    `Wire est. ${formatBytesCompact(estimatedWireBytes)}`,
+    limitHandling,
+    payloadGeneration,
+  ]);
+}
+
+function activeExecutionRun() {
+  return state.runs.find((run) =>
+    ["preparing", "scheduled", "warmup", "measuring", "cooldown", "finalizing", "cleaning"].includes(run.status)
+  ) || null;
 }
 
 function blockingRun() {
-  return state.runs.find((run) =>
-    ["preparing", "scheduled", "warmup", "measuring", "cooldown", "cleaning"].includes(run.status)
-  ) || null;
+  if (elements.scheduleModeSelect.value === "sequential") {
+    return null;
+  }
+  return activeExecutionRun();
 }
 
 function renderFinalRunSummary() {
@@ -1304,7 +1330,7 @@ function renderFinalRunSummary() {
     Number(elements.warmupSecondsInput.value || 0) +
     Number(elements.measurementSecondsInput.value || 0) +
     Number(elements.cooldownSecondsInput.value || 0);
-  const activeRun = blockingRun();
+  const activeRun = activeExecutionRun();
   const startValue = elements.startsAtInput.value;
   const startLabel = startValue ? new Date(startValue).toLocaleString() : "Immediate";
   const producers = Math.max(1, Number(elements.producersInput.value || 1));
@@ -1312,12 +1338,17 @@ function renderFinalRunSummary() {
   const measure = Number(elements.measurementSecondsInput.value || 0);
   const warmup = Number(elements.warmupSecondsInput.value || 0);
   const cooldown = Number(elements.cooldownSecondsInput.value || 0);
+  const rangeStart = Math.max(1, Number(elements.messageRangeStartInput.value || 1));
+  const rangeEnd = Math.max(0, Number(elements.messageRangeEndInput.value || 0));
+  const payloadPolicy = elements.payloadLimitHandlingSelect.value === "strict" ? "Strict payload limits" : "Auto payload limits";
+  const payloadGeneration = elements.payloadGenerationModeSelect.value === "reuse-template" ? "Reuse one payload template" : "Fresh payload each send";
   elements.finalRunSummaryCard.innerHTML = `
     <span>Recap</span>
     <strong>${brokerLabel(state.selectedBrokerId)}</strong>
-    <p class="hint">${compactList([setupLabel(elements.configModeSelect.value), deploymentLabel(elements.deploymentModeSelect.value), elements.protocolSelect.value])}</p>
+    <p class="hint">${compactList([setupLabel(elements.configModeSelect.value), deploymentLabel(elements.deploymentModeSelect.value), elements.protocolSelect.value, elements.scheduleModeSelect.value === "sequential" ? "Sequential queue" : "Parallel start"])}</p>
     <p class="hint">${compactList([loadProfileLabel(), `${formatBytesCompact(elements.messageSizeBytesInput.value)} payload`, `${producers} producer${producers > 1 ? "s" : ""}`, `${consumers} consumer${consumers > 1 ? "s" : ""}`])}</p>
     <p class="hint">${compactList([`${formatDuration(total)} total`, `Measure ${formatDuration(measure)}`, `Warmup ${formatDuration(warmup)}`, `Cooldown ${formatDuration(cooldown)}`, `Start ${startLabel}`])}</p>
+    <p class="hint">${compactList([rangeEnd > 0 ? `Message range ${rangeStart.toLocaleString()} to ${rangeEnd.toLocaleString()}` : `Message range starts at ${rangeStart.toLocaleString()} and keeps increasing`, payloadPolicy, payloadGeneration])}</p>
     ${
       activeRun
         ? `<p class="hint">Run in progress: ${activeRun.name}</p>`
@@ -1343,6 +1374,9 @@ function wizardReadiness() {
     step1 &&
     numericInputValid(elements.messageRateInput, 1) &&
     numericInputValid(elements.messageSizeBytesInput, 1) &&
+    numericInputValid(elements.messageRangeStartInput, 1) &&
+    numericInputValid(elements.messageRangeEndInput, 0) &&
+    (Number(elements.messageRangeEndInput.value || 0) === 0 || Number(elements.messageRangeEndInput.value || 0) >= Number(elements.messageRangeStartInput.value || 1)) &&
     numericInputValid(elements.producersInput, 1) &&
     numericInputValid(elements.consumersInput, 1) &&
     numericInputValid(elements.warmupSecondsInput, 0) &&
@@ -1387,8 +1421,8 @@ function renderWizardState() {
 
   elements.stepBackButton.disabled = state.wizardStep <= 1;
   elements.stepNextButton.disabled = state.wizardStep >= unlocked;
-  elements.startBenchmarkButton.disabled = !readiness.step3 || !!activeRun;
-  elements.resetAllButton.disabled = !!activeRun;
+  elements.startBenchmarkButton.disabled = !readiness.step3 || !!blockingRun();
+  elements.resetAllButton.disabled = !!activeExecutionRun();
 }
 
 function eventsForRun(runId) {
@@ -1409,6 +1443,23 @@ function failureEventForRun(runId) {
 
 function hasMeasuredResults(run) {
   return Number(run?.metrics?.summary?.endToEndLatencyMs?.count || 0) > 0;
+}
+
+function runDiagnostics(run) {
+  return Array.isArray(run?.diagnostics) ? run.diagnostics : [];
+}
+
+function producerPipeline(run) {
+  const pipeline = run?.metrics?.measurement?.producerPipeline;
+  return pipeline && typeof pipeline === "object" ? pipeline : {};
+}
+
+function runSelectionCaption(run) {
+  const flags = [];
+  if (!hasMeasuredResults(run)) flags.push("zero samples");
+  if (runDiagnostics(run).some((item) => item.code === "degraded")) flags.push("degraded");
+  if (runDiagnostics(run).some((item) => item.code === "late-job-failure")) flags.push("late job issue");
+  return flags.join(" · ");
 }
 
 function compactMessage(message, max = 180) {
@@ -1508,6 +1559,8 @@ function formatRelativeWindow(fromIso, toIso) {
 
 function currentPhaseLabel(run) {
   const status = String(run.status || "").toLowerCase();
+  if (status === "queued") return "Queued";
+  if (status === "waiting") return "Waiting";
   if (status === "scheduled" || status === "preparing") return "Preparing";
   if (status === "warmup") return "Warmup";
   if (status === "measuring") return "Measuring";
@@ -1609,7 +1662,7 @@ function renderRunList() {
     return;
   }
 
-  const activeStatuses = new Set(["scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"]);
+  const activeStatuses = new Set(["queued", "waiting", "scheduled", "preparing", "warmup", "measuring", "cooldown", "finalizing", "cleaning"]);
   const activeRuns = state.runs.filter((run) => activeStatuses.has(String(run.status || "").toLowerCase()));
   const historyRuns = state.runs.filter((run) => !activeStatuses.has(String(run.status || "").toLowerCase()));
   const sections = [
@@ -1776,8 +1829,11 @@ function loadRunIntoBenchmark(run) {
 
   elements.runNameInput.value = suggestReuseRunName(run);
   elements.startsAtInput.value = "";
+  elements.scheduleModeSelect.value = String(run.scheduleMode || "parallel").trim() || "parallel";
   elements.messageRateInput.value = String(run.messageRate || 1);
   elements.messageSizeBytesInput.value = String(run.messageSizeBytes || 1024);
+  elements.messageRangeStartInput.value = String(run.messageRangeStart || 1);
+  elements.messageRangeEndInput.value = String(run.messageRangeEnd || 0);
   elements.producersInput.value = String(run.producers || 1);
   elements.consumersInput.value = String(run.consumers || 1);
   elements.warmupSecondsInput.value = String(run.warmupSeconds || 0);
@@ -1786,6 +1842,8 @@ function loadRunIntoBenchmark(run) {
 
   const transportOptions = run.transportOptions || {};
   elements.rateProfileSelect.value = String(transportOptions.rateProfileKind || "constant").trim() || "constant";
+  elements.payloadLimitHandlingSelect.value = String(transportOptions.payloadLimitHandling || "auto").trim() === "strict" ? "strict" : "auto";
+  elements.payloadGenerationModeSelect.value = transportOptions.reusePayloadTemplate ? "reuse-template" : "fresh";
   const mergedTuningModel = buildTuningModel(setupPreset);
   const savedTuning = run.brokerTuning || {};
   mergedTuningModel.setupPreset = setupPreset;
@@ -1819,8 +1877,7 @@ function measuredRuns() {
   return state.runs.filter(
     (run) =>
       run.status === "completed" &&
-      run.metrics?.source === "benchmark-agent" &&
-      Number(run.metrics?.summary?.endToEndLatencyMs?.count || 0) > 0
+      run.metrics?.source === "benchmark-agent"
   );
 }
 
@@ -1926,7 +1983,7 @@ function ensureReportSelection(availableRuns = measuredRuns()) {
 
 function renderReportRunPicker(availableRuns = measuredRuns()) {
   if (!availableRuns.length) {
-    elements.reportRunPicker.innerHTML = `<p class="empty">No completed measured runs yet.</p>`;
+    elements.reportRunPicker.innerHTML = `<p class="empty">No completed benchmark runs yet.</p>`;
     return;
   }
 
@@ -1956,7 +2013,10 @@ function renderReportRunPicker(availableRuns = measuredRuns()) {
           const selected = state.reportSelectedIds.has(run.id);
           return `
             <button type="button" class="viz-run-option ${selected ? "selected" : ""}" data-report-run-id="${run.id}" title="${run.name}">
-              <span>${run.name}</span>
+              <span class="viz-run-label">
+                <strong>${run.name}</strong>
+                ${runSelectionCaption(run) ? `<small class="viz-run-caption">${runSelectionCaption(run)}</small>` : ""}
+              </span>
               <span class="viz-run-check" aria-hidden="true">${selected ? "&#10003;" : ""}</span>
             </button>
           `;
@@ -2006,7 +2066,7 @@ function renderReportRunPicker(availableRuns = measuredRuns()) {
 
 function renderVisualizationPicker(availableRuns = measuredRuns()) {
   if (!availableRuns.length) {
-    elements.vizRunPicker.innerHTML = `<p class="empty">No completed measured runs yet.</p>`;
+    elements.vizRunPicker.innerHTML = `<p class="empty">No completed benchmark runs yet.</p>`;
     return;
   }
 
@@ -2035,8 +2095,11 @@ function renderVisualizationPicker(availableRuns = measuredRuns()) {
           const selected = state.vizSelectedIds.has(run.id);
           return `
             <button type="button" class="viz-run-option ${selected ? "selected" : ""}" data-run-id="${run.id}" title="${run.name}">
-              <span>${run.name}</span>
-                <span class="viz-run-check" aria-hidden="true">${selected ? "&#10003;" : ""}</span>
+              <span class="viz-run-label">
+                <strong>${run.name}</strong>
+                ${runSelectionCaption(run) ? `<small class="viz-run-caption">${runSelectionCaption(run)}</small>` : ""}
+              </span>
+              <span class="viz-run-check" aria-hidden="true">${selected ? "&#10003;" : ""}</span>
             </button>
           `;
         })
@@ -2293,6 +2356,13 @@ function renderVizSummary(runs) {
     const summary = primary.metrics?.summary || {};
     const latency = summary.endToEndLatencyMs || {};
     const throughput = summary.throughput || {};
+    const pipeline = producerPipeline(primary);
+    const pipelineHint = compactList([
+      pipeline.payloadRegenerated === false ? "Reused payload template" : "Fresh payloads",
+      pipeline.bottleneckHint ? `Bottleneck ${pipeline.bottleneckHint}` : "",
+      pipeline.avgPayloadGenerationMsPerMessage ? `${formatMetric(pipeline.avgPayloadGenerationMsPerMessage, 3)} ms payload gen` : "",
+      pipeline.avgPublishCallMsPerMessage ? `${formatMetric(pipeline.avgPublishCallMsPerMessage, 3)} ms publish call` : "",
+    ].filter(Boolean));
     elements.vizSummary.innerHTML = `
       <article class="metric-card">
         <span class="metric-label">Selected run</span>
@@ -2320,6 +2390,11 @@ function renderVizSummary(runs) {
         <span class="metric-label">Duration</span>
         <strong>${runDurationLabel(primary)}</strong>
         <p class="hint">${compactList([`Warmup ${formatDuration(primary.warmupSeconds || 0)}`, `Measure ${formatDuration(primary.measurementSeconds || 0)}`, `Cooldown ${formatDuration(primary.cooldownSeconds || 0)}`])}</p>
+      </article>
+      <article class="metric-card">
+        <span class="metric-label">Producer pipeline</span>
+        <strong>${pipeline.bottleneckHint ? escapeHtml(pipeline.bottleneckHint) : "balanced"}</strong>
+        <p class="hint">${escapeHtml(pipelineHint || "No producer pipeline diagnostics recorded.")}</p>
       </article>
     `;
     return;
@@ -2759,6 +2834,8 @@ function renderReportPreviewBody(runs) {
       const latency = summary.endToEndLatencyMs || {};
       const throughput = summary.throughput || {};
       const measured = hasMeasuredResults(run);
+      const diagnostics = runDiagnostics(run);
+      const pipeline = producerPipeline(run);
       const setupLabel = compactList([brokerLabel(run.brokerId), runSetupLabel(run), deploymentLabel(run.deploymentMode)]);
       const scenarioLabel = compactList([
         run.protocol.toUpperCase(),
@@ -2812,6 +2889,11 @@ function renderReportPreviewBody(runs) {
               <span class="report-data-label">Resources</span>
               <strong>${escapeHtml(reportResourceSummary(run.resourceConfig || {}))}</strong>
               <p>${escapeHtml(resourceConfigSummary(run.resourceConfig || {}))}</p>
+            </section>
+            <section class="report-data-block">
+              <span class="report-data-label">Diagnostics</span>
+              <strong>${escapeHtml(runSelectionCaption(run) || "Healthy")}</strong>
+              <p>${escapeHtml(compactList([diagnostics[0]?.message || "Completed benchmark run with persisted results.", pipeline.bottleneckHint ? `Producer bottleneck: ${pipeline.bottleneckHint}` : ""]))}</p>
             </section>
           </div>
         </article>
@@ -2994,10 +3076,10 @@ async function refreshData() {
 async function submitBenchmark(event) {
   event.preventDefault();
   if (elements.startBenchmarkButton.disabled) {
-    const activeRun = blockingRun();
+    const activeRun = activeExecutionRun();
     showFlash(
-      activeRun
-        ? `Wait for ${activeRun.name} to finish cleanup before starting another run.`
+      blockingRun()
+        ? `Wait for ${activeRun.name} to finish cleanup before starting another run in parallel mode.`
         : (!brokerReadyForRun(state.selectedBrokerId)
             ? `Control plane for ${brokerLabel(state.selectedBrokerId)} is not ready yet.`
             : "Complete the required fields first."),
@@ -3009,6 +3091,8 @@ async function submitBenchmark(event) {
   const startsAtRaw = elements.startsAtInput.value;
   const transportOptions = {
     rateProfileKind: loadProfileValue(),
+    payloadLimitHandling: elements.payloadLimitHandlingSelect.value || "auto",
+    reusePayloadTemplate: elements.payloadGenerationModeSelect.value === "reuse-template",
   };
   const payload = {
     name: elements.runNameInput.value.trim(),
@@ -3016,10 +3100,13 @@ async function submitBenchmark(event) {
     scenarioId: elements.scenarioSelect.value || null,
     configMode: effectiveConfigMode(elements.configModeSelect.value || "latency"),
     deploymentMode: elements.deploymentModeSelect.value || "normal",
+    scheduleMode: elements.scheduleModeSelect.value || "parallel",
     protocol: elements.protocolSelect.value,
     startsAt: startsAtRaw ? new Date(startsAtRaw).toISOString() : null,
     messageRate: Number(elements.messageRateInput.value),
     messageSizeBytes: Number(elements.messageSizeBytesInput.value),
+    messageRangeStart: Number(elements.messageRangeStartInput.value || 1),
+    messageRangeEnd: Number(elements.messageRangeEndInput.value || 0),
     producers: Number(elements.producersInput.value),
     consumers: Number(elements.consumersInput.value),
     warmupSeconds: Number(elements.warmupSecondsInput.value),
@@ -3043,7 +3130,10 @@ async function submitBenchmark(event) {
     body: JSON.stringify(payload),
   });
   elements.runNameInput.value = "";
-  showFlash(`Run ${run.name} started.`, "success");
+  showFlash(
+    `${run.name} ${run.status === "queued" || run.status === "waiting" ? "queued" : "started"}${run.transportOptions?.payloadLimitHandling === "auto-adjusted" ? " with payload limits auto-adjusted." : "."}`,
+    "success"
+  );
   await refreshData();
 }
 
@@ -3117,6 +3207,7 @@ function bindHandlers() {
     updateWizardState();
   });
   elements.scenarioSelect.addEventListener("change", (event) => applySetup(event.target.value));
+  elements.scheduleModeSelect.addEventListener("change", updateWizardState);
   elements.rateProfileSelect.addEventListener("change", updateWizardState);
   elements.messageRateInput.addEventListener("change", updateWizardState);
   elements.configScopeTabs.addEventListener("click", (event) => {
@@ -3128,8 +3219,13 @@ function bindHandlers() {
   elements.configEditor.addEventListener("input", updateTuningValue);
   elements.configEditor.addEventListener("change", updateTuningValue);
   for (const input of [
+    elements.scheduleModeSelect,
     elements.rateProfileSelect,
     elements.messageSizeBytesInput,
+    elements.messageRangeStartInput,
+    elements.messageRangeEndInput,
+    elements.payloadLimitHandlingSelect,
+    elements.payloadGenerationModeSelect,
     elements.producersInput,
     elements.consumersInput,
     elements.startsAtInput,
